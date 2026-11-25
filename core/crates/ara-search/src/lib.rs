@@ -6,8 +6,9 @@
 //!   invented: if nothing matches, the result list is empty.
 //! * Memory: short facts the *user* adds/approves. Never written automatically.
 //!
-//! Formats: txt, md, csv, json, log, html (tags stripped). PDF/DOCX extraction
-//! is not implemented yet and is rejected explicitly.
+//! Formats: txt, md, csv, json, log, html (tags stripped), pdf (text layer
+//! only, page-cited). DOCX/EPUB and OCR for scanned PDFs are not implemented
+//! yet and are rejected explicitly.
 
 pub mod extract;
 pub mod guard;
@@ -48,6 +49,9 @@ pub struct Hit {
     pub document: String,
     /// 1-based line where the chunk starts.
     pub line: u32,
+    /// 1-based page number, for formats with a page concept (PDF). `None`
+    /// for plain-text formats, where a line number is the real citation.
+    pub page: Option<u32>,
     /// Original (not normalized) chunk text.
     pub text: String,
     /// Lower is better (FTS5 bm25).
@@ -99,7 +103,8 @@ impl SearchIndex {
                 name TEXT NOT NULL,
                 sha256 TEXT NOT NULL UNIQUE,
                 bytes INTEGER NOT NULL,
-                added_ms INTEGER NOT NULL);
+                added_ms INTEGER NOT NULL,
+                page_starts TEXT);
              CREATE TABLE IF NOT EXISTS chunks(
                 id INTEGER PRIMARY KEY,
                 doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -159,12 +164,20 @@ impl SearchIndex {
         if let Some(d) = self.document_by_sha(&sha)? {
             return Ok(d);
         }
-        let text = extract::extract_text(&name, bytes)?;
-        let chunks = chunk(&text);
+        let extracted = extract::extract_text(&name, bytes)?;
+        let chunks = chunk(&extracted.text);
+        let page_starts = if extracted.page_starts.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&extracted.page_starts)
+                    .map_err(|e| AraError::Internal(format!("page_starts: {e}")))?,
+            )
+        };
         let tx = self.db.transaction().map_err(db_err)?;
         tx.execute(
-            "INSERT INTO documents(name, sha256, bytes, added_ms) VALUES(?1, ?2, ?3, ?4)",
-            params![name, sha, bytes.len() as i64, now_ms()],
+            "INSERT INTO documents(name, sha256, bytes, added_ms, page_starts) VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![name, sha, bytes.len() as i64, now_ms(), page_starts],
         )
         .map_err(db_err)?;
         let doc_id = tx.last_insert_rowid();
@@ -277,7 +290,7 @@ impl SearchIndex {
         let mut st = self
             .db
             .prepare(
-                "SELECT d.name, c.line, c.text, bm25(chunks_fts) AS s
+                "SELECT d.name, c.line, c.text, bm25(chunks_fts) AS s, d.page_starts
                  FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
                  JOIN documents d ON d.id = c.doc_id
                  WHERE chunks_fts MATCH ?1 ORDER BY s LIMIT ?2",
@@ -285,22 +298,27 @@ impl SearchIndex {
             .map_err(db_err)?;
         let rows = st
             .query_map(params![terms.join(" OR "), limit.clamp(1, 50)], |r| {
-                Ok(Hit {
-                    document: r.get(0)?,
-                    line: r.get::<_, i64>(1)? as u32,
-                    text: r.get(2)?,
-                    score: r.get(3)?,
-                })
+                Ok((
+                    Hit {
+                        document: r.get(0)?,
+                        line: r.get::<_, i64>(1)? as u32,
+                        page: None,
+                        text: r.get(2)?,
+                        score: r.get(3)?,
+                    },
+                    r.get::<_, Option<String>>(4)?,
+                ))
             })
             .map_err(db_err)?;
-        let mut hits: Vec<Hit> = rows.collect::<Result<_, _>>().map_err(db_err)?;
-        // Point the citation at the best-matching line inside the chunk.
+        let mut hits: Vec<(Hit, Option<String>)> = rows.collect::<Result<_, _>>().map_err(db_err)?;
+        // Point the citation at the best-matching line inside the chunk,
+        // then resolve that line to a page number for paginated formats.
         let words: Vec<String> = normalize(query)
             .split_whitespace()
             .filter(|w| w.chars().count() >= 2)
             .map(str::to_string)
             .collect();
-        for h in &mut hits {
+        for (h, page_starts_json) in &mut hits {
             let best = h
                 .text
                 .lines()
@@ -313,8 +331,13 @@ impl SearchIndex {
                 .map(|(_, i)| i)
                 .unwrap_or(0);
             h.line += best as u32;
+            if let Some(json) = page_starts_json {
+                if let Ok(starts) = serde_json::from_str::<Vec<u32>>(json) {
+                    h.page = extract::page_for_line(&starts, h.line);
+                }
+            }
         }
-        Ok(hits)
+        Ok(hits.into_iter().map(|(h, _)| h).collect())
     }
 
     /// Base words plus their crosswalk + learned-alias expansions, deduped,
@@ -562,6 +585,35 @@ mod tests {
         assert_eq!(ix.search("الميزانية", 5).unwrap().len(), 1);
         assert_eq!(ix.search("5000", 5).unwrap().len(), 1);
         assert!(ix.search("برتقال", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pdf_hits_are_cited_by_page_not_line() {
+        let pdf = extract::make_pdf(&[
+            "Budget approved for 85000 pounds",
+            "Timeline: delivery by Thursday",
+            "Contact the project lead for questions",
+        ]);
+        let mut ix = SearchIndex::open_in_memory().unwrap();
+        ix.add_document("plan.pdf", &pdf).unwrap();
+
+        let h = ix.search("Thursday", 5).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].document, "plan.pdf");
+        assert_eq!(h[0].page, Some(2), "match is on the 2nd page's text");
+
+        let h = ix.search("85000", 5).unwrap();
+        assert_eq!(h[0].page, Some(1));
+        let h = ix.search("project lead", 5).unwrap();
+        assert_eq!(h[0].page, Some(3));
+    }
+
+    #[test]
+    fn non_paginated_formats_have_no_page() {
+        let mut ix = SearchIndex::open_in_memory().unwrap();
+        ix.add_document("note.txt", b"hello world").unwrap();
+        let h = ix.search("hello", 5).unwrap();
+        assert_eq!(h[0].page, None);
     }
 
     #[test]

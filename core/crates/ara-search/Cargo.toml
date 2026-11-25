@@ -11,6 +11,10 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite = { version = "=0.41.1", features = ["bundled"] }
 sha2 = "=0.11.1"
+pdf-extract = "=0.12.1"
 
 [dev-dependencies]
+# Pinned to the same version pdf-extract depends on, so tests don't compile
+# a second copy of lopdf just to build throwaway test PDFs.
+lopdf = "=0.42.0"
 tempfile = "=3.27.0"

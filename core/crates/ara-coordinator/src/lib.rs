@@ -264,7 +264,10 @@ impl Services for IndexServices<'_> {
                         // flag instruction-like content as untrusted data.
                         let text: String = h.text.chars().take(600).collect();
                         let mut r = serde_json::json!({
-                            "source": format!("{}:{}", h.document, h.line),
+                            "source": match h.page {
+                                Some(p) => format!("{}:page {p}", h.document),
+                                None => format!("{}:{}", h.document, h.line),
+                            },
                             "text": ara_search::guard::neutralize(&text),
                         });
                         if ara_search::guard::injection_risk(&text) {
