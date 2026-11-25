@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "name": "weekly_notes.txt",
+      "text": "Weekly sync notes\nThe task deadline is next Sunday, confirmed by the team lead.\nAhmed owns the budget line for this quarter.\nDelivery date for the client demo is Thursday."
+    },
+    {
+      "name": "ai_notes.md",
+      "text": "Project tech notes\nGenerative AI is changing how we draft reports.\nWe use semantic search to find passages across files.\nTool calling lets the assistant run calculator and reminders."
+    },
+    {
+      "name": "خطة_المشروع.txt",
+      "text": "خطة المشروع\nالموعد النهائي يوم الخميس القادم\nالمسؤول عن الميزانية هو أحمد علي\nاجتماع المراجعة يوم الأحد"
+    },
+    {
+      "name": "ملاحظات_شغل.txt",
+      "text": "ملاحظات شغل\nعايز افتح ملف التقرير بكره الصبح\nمحتاج دور على صورة قديمة في الأرشيف\nفيه مهمة جديدة محتاجة تنبيه الساعة تسعة"
+    },
+    {
+      "name": "recipe.txt",
+      "text": "Simple bread recipe\nMix flour, water, yeast and salt.\nLet the dough rest for one hour.\nBake at 220 degrees for 30 minutes."
+    },
+    {
+      "name": "device_specs.txt",
+      "text": "Device specifications\nThe battery capacity is 5000 mAh.\nScreen resolution is 1080 by 2400 pixels.\nWeight is 190 grams."
+    }
+  ],
+  "questions": [
+    {"id": 1, "query": "budget Ahmed", "expected_document": "weekly_notes.txt", "expected_line": 3, "crosswalk_required": false, "note": "literal match, sanity baseline"},
+    {"id": 2, "query": "delivery date Thursday", "expected_document": "weekly_notes.txt", "expected_line": 4, "crosswalk_required": false, "note": "literal match"},
+    {"id": 3, "query": "flour yeast salt", "expected_document": "recipe.txt", "expected_line": 2, "crosswalk_required": false, "note": "literal match, distractor-doc disambiguation"},
+    {"id": 4, "query": "battery capacity mAh", "expected_document": "device_specs.txt", "expected_line": 2, "crosswalk_required": false, "note": "literal match, distractor-doc disambiguation"},
+    {"id": 5, "query": "screen resolution pixels", "expected_document": "device_specs.txt", "expected_line": 3, "crosswalk_required": false, "note": "literal match"},
+    {"id": 6, "query": "الموعد النهائي الخميس", "expected_document": "خطة_المشروع.txt", "expected_line": 2, "crosswalk_required": false, "note": "literal MSA match, sanity baseline"},
+    {"id": 7, "query": "اجتماع المراجعة الأحد", "expected_document": "خطة_المشروع.txt", "expected_line": 4, "crosswalk_required": false, "note": "literal MSA match"},
+    {"id": 8, "query": "الذكاء الاصطناعي التوليدي", "expected_document": "ai_notes.md", "expected_line": 2, "crosswalk_required": true, "note": "Arabic phrase -> English term, no literal overlap at all"},
+    {"id": 9, "query": "عايز اعرف ازاي البحث المعنوي بيشتغل", "expected_document": "ai_notes.md", "expected_line": 3, "crosswalk_required": true, "note": "Arabic phrase -> English term (semantic search), no literal overlap"},
+    {"id": 10, "query": "set an alert", "expected_document": "ملاحظات_شغل.txt", "expected_line": 4, "crosswalk_required": true, "note": "English -> Egyptian Arabic (alert -> تنبيه), no literal overlap"},
+    {"id": 11, "query": "open report file", "expected_document": "ملاحظات_شغل.txt", "expected_line": 2, "crosswalk_required": true, "note": "English -> Egyptian Arabic (file -> ملف, open -> افتح), no literal overlap"},
+    {"id": 12, "query": "search old photo", "expected_document": "ملاحظات_شغل.txt", "expected_line": 3, "crosswalk_required": true, "note": "English -> Egyptian Arabic (search -> دور على, photo -> صورة), no literal overlap"},
+    {"id": 13, "query": "مطلوب نعمل حاجة تانية خالص مش موجودة", "expected_document": null, "expected_line": null, "crosswalk_required": false, "note": "negative: nothing in the corpus matches, expect empty results"},
+    {"id": 14, "query": "mountain climbing equipment rental prices", "expected_document": null, "expected_line": null, "crosswalk_required": false, "note": "negative: nothing in the corpus matches, expect empty results"}
+  ]
+}

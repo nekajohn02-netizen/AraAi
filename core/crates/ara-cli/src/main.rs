@@ -143,6 +143,7 @@ fn run(args: &[String]) -> AraResult<()> {
         Some("agent") => agent(&ctx, args)?,
         Some("verify") => verify(&ctx, args)?,
         Some("bench-ar") => bench_ar(&ctx, args)?,
+        Some("eval-retrieval") => eval_retrieval(args)?,
         _ => {
             eprintln!("usage: ara <profile|models|download|bench|chat> ...");
             std::process::exit(2);
@@ -462,6 +463,35 @@ fn verify(ctx: &Ctx, args: &[String]) -> AraResult<()> {
     all.retain(|x| x.model_id != r.model_id);
     all.push(r);
     std::fs::write(&path, serde_json::to_string_pretty(&all).unwrap())?;
+    Ok(())
+}
+
+/// T1.3: Recall@K/MRR for ara-search's retrieval against a small fixed
+/// corpus. No model, no device, no download — pure ara-search.
+fn eval_retrieval(args: &[String]) -> AraResult<()> {
+    let r = ara_coordinator::retrieval_eval::run()?;
+    println!(
+        "positive questions: {} | recall@5 {:.0}% | recall@10 {:.0}% | MRR {:.2}",
+        r.positive_total,
+        r.recall_at_5 * 100.0,
+        r.recall_at_10 * 100.0,
+        r.mrr
+    );
+    println!(
+        "crosswalk-required subset: {}/{} recall@10 {:.0}%",
+        r.crosswalk_required_total,
+        r.crosswalk_required_total,
+        r.crosswalk_required_recall_at_10 * 100.0
+    );
+    println!(
+        "negative questions (expect empty): {}/{} correct",
+        r.negative_correct, r.negative_total
+    );
+    if args.iter().any(|a| a == "--failures") {
+        for m in &r.misses {
+            println!("  ✗ {m}");
+        }
+    }
     Ok(())
 }
 

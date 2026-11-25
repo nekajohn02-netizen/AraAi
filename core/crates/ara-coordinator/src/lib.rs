@@ -15,6 +15,7 @@ use ara_tools::{Dispatch, Services, ToolCall, ToolRegistry};
 use serde::{Deserialize, Serialize};
 
 pub mod arabic_bench;
+pub mod retrieval_eval;
 pub mod verify;
 
 /// Model turns per user message (call tools → read results → answer).
