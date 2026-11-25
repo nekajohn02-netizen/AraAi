@@ -93,7 +93,7 @@ fun FilesScreen(bridge: CoreBridge) {
         }
         item {
             Button(enabled = !busy, onClick = {
-                picker.launch(arrayOf("text/*", "application/json", "text/csv", "text/markdown", "text/html"))
+                picker.launch(arrayOf("text/*", "application/json", "text/csv", "text/markdown", "text/html", "application/pdf"))
             }) { Text(stringResource(R.string.import_files)) }
         }
         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }

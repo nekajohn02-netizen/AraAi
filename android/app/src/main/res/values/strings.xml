@@ -3,7 +3,9 @@
     <string name="app_name">ARA</string>
     <string name="tab_chat">Chat</string>
     <string name="tab_models">Models</string>
+    <string name="tab_missions">Missions</string>
     <string name="tab_skills">Skills</string>
+    <string name="tab_security">Security</string>
     <string name="tab_settings">Settings</string>
 
     <string name="title_device">This device</string>
@@ -74,7 +76,7 @@
     <string name="privacy_body">Conversations, models and settings stay on this phone and are excluded from cloud backup. ARA only uses the internet to download models you choose.</string>
     <string name="tab_files">My files</string>
     <string name="files_title">My files &amp; memory</string>
-    <string name="files_note">Import text files (TXT, Markdown, CSV, JSON, HTML) so ARA can answer from them with sources. Files stay on this phone. PDF support is coming.</string>
+    <string name="files_note">Import text files (TXT, Markdown, CSV, JSON, HTML) or PDFs so ARA can answer from them with sources (page number for PDFs). Files stay on this phone.</string>
     <string name="import_files">Import files</string>
     <string name="search_files">Search your files…</string>
     <string name="no_results">No matches in your files.</string>
@@ -104,4 +106,38 @@
     <string name="agree">I agree</string>
     <string name="key_missing">API key not found — add the provider again.</string>
     <string name="running_cloud">☁ Cloud · %1$s</string>
+
+    <string name="missions_title">Missions</string>
+    <string name="missions_note">ARA works on a goal by itself for minutes to 24 hours. Anything that affects the outside world still stops and asks you — a mission just keeps working on the rest while it waits.</string>
+    <string name="new_mission">New mission</string>
+    <string name="no_missions">No missions yet.</string>
+    <string name="mission_status_line">%1$s · step %2$d of %3$d</string>
+    <string name="mission_result">Result: %1$s</string>
+    <string name="pause">Pause</string>
+    <string name="resume_mission">Resume</string>
+    <string name="mission_log">Log</string>
+    <string name="no_log_entries">No log entries yet.</string>
+    <string name="mission_goal_hint">What should ARA do?</string>
+    <string name="mission_persona">Mode</string>
+    <string name="mission_max_steps">Max steps</string>
+    <string name="mission_max_time">Max time</string>
+    <string name="start_mission">Start</string>
+    <string name="mission_channel">Mission updates</string>
+    <string name="mission_needs_approval">Needs your approval</string>
+    <string name="mission_done">Finished</string>
+    <string name="mission_step_failed">Stopped: %1$s</string>
+    <string name="mission_status_running">Running</string>
+    <string name="mission_status_paused">Paused</string>
+    <string name="mission_status_completed">Completed</string>
+    <string name="mission_status_failed">Failed</string>
+    <string name="mission_status_cancelled">Cancelled</string>
+    <string name="mission_status_budget_exhausted">Budget exhausted</string>
+
+    <string name="security_title">Security check</string>
+    <string name="security_note">Checks ARA\'s own data for tampering, looks for anything listening on the network, and reviews a few device settings — with evidence for every finding, and a fix you can act on. It never claims the device is \"secure\", only that these checks found nothing.</string>
+    <string name="run_scan">Run scan</string>
+    <string name="security_score">Score: %1$d / 100</string>
+    <string name="security_checks_run">Checks run: %1$s</string>
+    <string name="security_no_findings">No findings.</string>
+    <string name="security_evidence">Evidence: %1$s</string>
 </resources>

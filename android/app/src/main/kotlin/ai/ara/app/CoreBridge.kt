@@ -76,5 +76,7 @@ class CoreBridge private constructor(private val context: Context) {
 
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
+fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
+
 fun JSONObject.optStringOrNull(key: String): String? =
     if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }

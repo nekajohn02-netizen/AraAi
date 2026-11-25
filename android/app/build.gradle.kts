@@ -82,6 +82,10 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.activity.compose)
+    // Runs mission steps periodically in the background, surviving app
+    // closure (and, via KEEP + reboot re-enqueue in MainActivity, reboots).
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.core.ktx)
     // UniFFI's Kotlin bindings load the native library through JNA.
     implementation("${libs.jna.get()}@aar")
 

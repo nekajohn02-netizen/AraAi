@@ -3,7 +3,9 @@
     <string name="app_name">آرا</string>
     <string name="tab_chat">المحادثة</string>
     <string name="tab_models">النماذج</string>
+    <string name="tab_missions">المهام</string>
     <string name="tab_skills">المهارات</string>
+    <string name="tab_security">الأمان</string>
     <string name="tab_settings">الإعدادات</string>
 
     <string name="title_device">هذا الجهاز</string>
@@ -74,7 +76,7 @@
     <string name="privacy_body">المحادثات والنماذج والإعدادات تبقى على هذا الهاتف ومستبعدة من النسخ الاحتياطي السحابي. آرا يستخدم الإنترنت فقط لتنزيل النماذج التي تختارها.</string>
     <string name="tab_files">ملفاتي</string>
     <string name="files_title">ملفاتي والذاكرة</string>
-    <string name="files_note">استورد ملفات نصية (TXT، Markdown، CSV، JSON، HTML) ليجيب آرا منها مع ذكر المصدر. الملفات تبقى على هاتفك. دعم PDF قريبًا.</string>
+    <string name="files_note">استورد ملفات نصية (TXT، Markdown، CSV، JSON، HTML) أو PDF ليجيب آرا منها مع ذكر المصدر (رقم الصفحة في ملفات PDF). الملفات تبقى على هاتفك.</string>
     <string name="import_files">استيراد ملفات</string>
     <string name="search_files">ابحث في ملفاتك…</string>
     <string name="no_results">لا توجد نتائج في ملفاتك.</string>
@@ -104,4 +106,38 @@
     <string name="agree">أوافق</string>
     <string name="key_missing">المفتاح غير موجود — أضف المزود مرة أخرى.</string>
     <string name="running_cloud">☁ سحابي · %1$s</string>
+
+    <string name="missions_title">المهام</string>
+    <string name="missions_note">آرا يعمل على هدف بنفسه من دقائق إلى 24 ساعة. أي شيء يؤثر على العالم الخارجي يتوقف دايمًا وياخد موافقتك — المهمة تفضل شغالة في باقي الحاجات وهي في انتظارك.</string>
+    <string name="new_mission">مهمة جديدة</string>
+    <string name="no_missions">لا توجد مهام بعد.</string>
+    <string name="mission_status_line">%1$s · خطوة %2$d من %3$d</string>
+    <string name="mission_result">النتيجة: %1$s</string>
+    <string name="pause">إيقاف مؤقت</string>
+    <string name="resume_mission">استكمال</string>
+    <string name="mission_log">السجل</string>
+    <string name="no_log_entries">لا يوجد سجل بعد.</string>
+    <string name="mission_goal_hint">عايز آرا يعمل إيه؟</string>
+    <string name="mission_persona">الوضع</string>
+    <string name="mission_max_steps">أقصى عدد خطوات</string>
+    <string name="mission_max_time">أقصى وقت</string>
+    <string name="start_mission">ابدأ</string>
+    <string name="mission_channel">تحديثات المهام</string>
+    <string name="mission_needs_approval">محتاجة موافقتك</string>
+    <string name="mission_done">خلصت</string>
+    <string name="mission_step_failed">توقفت: %1$s</string>
+    <string name="mission_status_running">شغالة</string>
+    <string name="mission_status_paused">متوقفة مؤقتًا</string>
+    <string name="mission_status_completed">خلصت</string>
+    <string name="mission_status_failed">فشلت</string>
+    <string name="mission_status_cancelled">أُلغيت</string>
+    <string name="mission_status_budget_exhausted">خلصت الميزانية المسموحة</string>
+
+    <string name="security_title">فحص الأمان</string>
+    <string name="security_note">يفحص بيانات آرا نفسه من أي تلاعب، يدور على أي شيء يستمع على الشبكة، ويراجع بعض إعدادات الجهاز — مع دليل لكل نتيجة، وحل تقدر تنفذه. آرا لا يدّعي إن الجهاز «آمن»، فقط إن هذه الفحوصات لم تجد شيئًا.</string>
+    <string name="run_scan">تشغيل الفحص</string>
+    <string name="security_score">النتيجة: %1$d / 100</string>
+    <string name="security_checks_run">الفحوصات المنفَّذة: %1$s</string>
+    <string name="security_no_findings">لا توجد ملاحظات.</string>
+    <string name="security_evidence">الدليل: %1$s</string>
 </resources>
