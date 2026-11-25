@@ -9,7 +9,15 @@
 //!   settings.json      storage cap etc.
 //!   index.db           SQLite: document search index + user memories
 //!   providers.json     API Hub providers (never the API keys)
+//!   activity.json      Privacy Center log: tool/outcome/skill metadata
+//!                      only, never call arguments or output (T1.7/T2.2e)
+//!   skills_imported.json  user-imported skill manifests (ADR-017/T2.2c) —
+//!                      always `trust_tier = Imported` regardless of what
+//!                      the imported file itself claims; the UI must show
+//!                      its unskippable warning before `import_skill` is
+//!                      ever called, not after
 
+use crate::activity_log::ActivityLog;
 use crate::conversations::ConversationStore;
 use crate::{parse, to_json, FfiError};
 use ara_coordinator::{Coordinator, IndexServices};
@@ -22,7 +30,7 @@ use ara_model_registry::{Capability, ModelRegistry};
 use ara_model_selector::{Benchmark, ModelSelector, SelectionMode, SelectionRequest};
 use ara_search::SearchIndex;
 use ara_tools::policy::{Grant, PermissionStore};
-use ara_tools::skills::{self, SkillManifest};
+use ara_tools::skills::{self, SkillManifest, TrustTier};
 use ara_tools::{Dispatch, Permission, Services, ToolCall, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -83,6 +91,13 @@ struct Settings {
     /// Context window used when loading models (smaller = less RAM).
     #[serde(default)]
     context_tokens: Option<u32>,
+    /// T1.7 (ADR-015): when true, every cloud call site in this file uses
+    /// `NetworkPolicy::StrictOffline`, which `ara-cloud` has proven (its
+    /// own tests, not just a code-review argument) never opens a socket —
+    /// not "tries and fails", never attempts a connection at all. Default
+    /// `false` (online) so existing installs see no behaviour change.
+    #[serde(default)]
+    strict_offline: bool,
 }
 
 struct Loaded {
@@ -98,12 +113,16 @@ pub struct AraCore {
     conversations: ConversationStore,
     tools: ToolRegistry,
     skills: Vec<SkillManifest>,
+    imported_skills: Mutex<Vec<SkillManifest>>,
+    /// Revoked skill ids (ADR-017/T2.2d) — see `skills::is_blocked`.
+    skill_blocklist: Mutex<Vec<String>>,
     grants: Mutex<PermissionStore>,
     settings: Mutex<Settings>,
     model: Mutex<Option<Loaded>>,
     index: Mutex<SearchIndex>,
     providers: Mutex<Vec<Provider>>,
     missions: ara_missions::MissionStore,
+    activity_log: ActivityLog,
 }
 
 fn now_ms() -> u64 {
@@ -178,6 +197,32 @@ impl AraCore {
     fn context(&self) -> u32 {
         lock(&self.settings).context_tokens.unwrap_or(4096)
     }
+    fn network_policy(&self) -> ara_cloud::NetworkPolicy {
+        if lock(&self.settings).strict_offline {
+            ara_cloud::NetworkPolicy::StrictOffline
+        } else {
+            ara_cloud::NetworkPolicy::Online
+        }
+    }
+    fn imported_skills_path(&self) -> PathBuf {
+        self.home.join("skills_imported.json")
+    }
+    /// Built-in skills plus whatever the user has imported (ADR-017/T2.2c).
+    /// Builtin ids always win a collision — see `import_skill`, which
+    /// already refuses to create one, so this is a defensive second check,
+    /// not the primary guard.
+    fn all_skills(&self) -> Vec<SkillManifest> {
+        let blocklist = lock(&self.skill_blocklist);
+        let mut all = self.skills.clone();
+        all.extend(
+            lock(&self.imported_skills)
+                .iter()
+                .filter(|s| !self.skills.iter().any(|b| b.id == s.id))
+                .filter(|s| !skills::is_blocked(&s.id, &blocklist))
+                .cloned(),
+        );
+        all
+    }
 }
 
 #[uniffi::export]
@@ -201,6 +246,9 @@ impl AraCore {
             index: Mutex::new(SearchIndex::open(&home.join("index.db"))?),
             providers: Mutex::new(read_json(&home.join("providers.json"))),
             missions: ara_missions::MissionStore::open(home.join("missions"))?,
+            activity_log: ActivityLog::open(home.join("activity.json")),
+            imported_skills: Mutex::new(read_json(&home.join("skills_imported.json"))),
+            skill_blocklist: Mutex::new(read_json(&home.join("skills_blocklist.json"))),
             tools,
             skills,
             home,
@@ -473,9 +521,10 @@ impl AraCore {
             .unwrap_or_else(|_| ara_tools::personas::find("general").expect("built-in"));
         let memory = lock(&self.index).memory_prompt(1200)?;
         let services = IndexServices(&self.index);
+        let skills = self.all_skills();
         let c = Coordinator {
             tools: &self.tools,
-            skills: &self.skills,
+            skills: &skills,
             grants: &grants,
             services: Some(&services),
             extra_system: &memory,
@@ -495,6 +544,21 @@ impl AraCore {
         )?;
         self.conversations
             .append(&conversation_id, &r.new_messages)?;
+        // Non-fatal: the message itself already saved above; losing an
+        // audit-log write must never lose the user's actual conversation.
+        let _ = self.activity_log.append(
+            r.tool_events
+                .iter()
+                .map(|e| {
+                    ActivityLog::entry(
+                        Some(conversation_id.clone()),
+                        None,
+                        r.routed_skills.clone(),
+                        &e.outcome,
+                    )
+                })
+                .collect(),
+        );
         if conv.messages.is_empty() {
             let title: String = text.chars().take(40).collect();
             let _ = self.conversations.rename(&conversation_id, &title);
@@ -515,17 +579,21 @@ impl AraCore {
             });
         }
         let grants = lock(&self.grants).clone();
-        match self.tools.dispatch(&call, &grants, true) {
+        let outcome = match self.tools.dispatch(&call, &grants, true) {
             // Service tools (e.g. remember) run right here once approved.
             Dispatch::RunService { call } => {
                 let output = IndexServices(&self.index).run(&call)?;
-                to_json(&Dispatch::Done {
+                Dispatch::Done {
                     tool: call.tool,
                     output,
-                })
+                }
             }
-            other => to_json(&other),
-        }
+            other => other,
+        };
+        let _ = self
+            .activity_log
+            .append(vec![ActivityLog::entry(None, None, vec![], &outcome)]);
+        to_json(&outcome)
     }
 
     // ------------------------------------------------------------ missions
@@ -589,10 +657,11 @@ impl AraCore {
             .as_mut()
             .ok_or_else(|| AraError::NotFound("no model loaded".into()))?;
         let mut err: Option<AraError> = None;
+        let skills = self.all_skills();
         let m = self.missions.step(&id, now_ms(), &mut |m| {
             let c = Coordinator {
                 tools: &self.tools,
-                skills: &self.skills,
+                skills: &skills,
                 grants: &grants,
                 services: Some(&services),
                 extra_system: &memory,
@@ -610,6 +679,19 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
             let params = GenerationParams { max_tokens: 400, ..Default::default() };
             match c.run_turn(&mut *loaded.model, &[], &prompt, &params, &cancel.0, &mut |_| {}) {
                 Ok(r) => {
+                    let _ = self.activity_log.append(
+                        r.tool_events
+                            .iter()
+                            .map(|e| {
+                                ActivityLog::entry(
+                                    None,
+                                    Some(id.clone()),
+                                    r.routed_skills.clone(),
+                                    &e.outcome,
+                                )
+                            })
+                            .collect(),
+                    );
                     if let Some(p) = r.pending_confirmation {
                         return ara_missions::StepOutcome::NeedsApproval {
                             summary: p.summary,
@@ -749,12 +831,25 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
     }
 
     /// "Test connection": lists the provider's models with this key.
+    /// Refuses immediately under Strict Offline Mode (`set_strict_offline`)
+    /// — never attempts a connection, not even to fail it (T1.7, ADR-015).
     pub fn cloud_models(&self, base_url: String, api_key: String) -> Result<Vec<String>, FfiError> {
-        // TODO(T1.7): thread a real Strict Offline Mode setting through here
-        // once it has an Android toggle; the enforcement primitive itself
-        // (`NetworkPolicy::StrictOffline`) is implemented and tested in
-        // ara-cloud today.
-        Ok(ara_cloud::list_models(&base_url, &api_key, ara_cloud::NetworkPolicy::Online)?)
+        Ok(ara_cloud::list_models(&base_url, &api_key, self.network_policy())?)
+    }
+
+    /// Strict Offline Mode (T1.7/ADR-015): when `enabled`, no cloud call in
+    /// this file will ever open a socket — `cloud_models`/`use_cloud_model`
+    /// refuse up front. Model downloads are unaffected on purpose: a
+    /// download is an explicit user action already, not a background
+    /// network call (same distinction `ara-model-manager` already draws).
+    pub fn set_strict_offline(&self, enabled: bool) -> Result<(), FfiError> {
+        let mut s = lock(&self.settings);
+        s.strict_offline = enabled;
+        write_json(&self.home.join("settings.json"), &*s)
+    }
+
+    pub fn strict_offline(&self) -> bool {
+        lock(&self.settings).strict_offline
     }
 
     /// Makes a configured provider the active model. Requires consent. The
@@ -777,7 +872,7 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
             &p.model,
             32_768,
             p.shield,
-            ara_cloud::NetworkPolicy::Online, // TODO(T1.7): see cloud_models above
+            self.network_policy(),
         )?;
         *lock(&self.model) = Some(Loaded {
             id: format!("cloud:{}/{}", p.id, p.model),
@@ -826,7 +921,7 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
 
     pub fn skills(&self) -> Result<String, FfiError> {
         let rows: Vec<_> = self
-            .skills
+            .all_skills()
             .iter()
             .map(|s| {
                 let mut perms: Vec<Permission> = s
@@ -841,6 +936,86 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
             })
             .collect();
         to_json(&rows)
+    }
+
+    /// Imports a user-supplied skill manifest (ADR-017/T2.2c). The caller
+    /// (Kotlin) MUST show its unskippable "not reviewed by ARA, requested
+    /// tools: [...]" warning *before* calling this — this function does
+    /// not show anything itself, it only enforces that the result can
+    /// never be mistaken for a built-in or ARA-verified skill:
+    /// `trust_tier` and `signature` in the input JSON are always
+    /// discarded and replaced with `Imported`/`None`, regardless of what
+    /// the file claims. Every tool the manifest requests must already
+    /// exist in `ToolRegistry` (`validate_skill`) — it can request the use
+    /// of an existing tool, never define a new one. Returns the imported
+    /// skill's id on success.
+    pub fn import_skill(&self, manifest_json: String) -> Result<String, FfiError> {
+        let mut m: SkillManifest = parse("skill manifest", &manifest_json)?;
+        m.trust_tier = TrustTier::Imported;
+        m.signature = None;
+        skills::validate_skill(&m, &self.tools)?;
+        if self.skills.iter().any(|b| b.id == m.id) {
+            return Err(AraError::InvalidInput(format!(
+                "'{}' is a built-in skill id and cannot be overridden by an import",
+                m.id
+            ))
+            .into());
+        }
+        if skills::is_blocked(&m.id, &lock(&self.skill_blocklist)) {
+            return Err(AraError::InvalidInput(format!("'{}' is on the revocation list", m.id)).into());
+        }
+        let mut imported = lock(&self.imported_skills);
+        if imported.iter().any(|s| s.id == m.id) {
+            return Err(AraError::InvalidInput(format!(
+                "a skill '{}' is already imported; remove it first to re-import",
+                m.id
+            ))
+            .into());
+        }
+        imported.push(m.clone());
+        write_json(&self.imported_skills_path(), &*imported)?;
+        Ok(m.id)
+    }
+
+    /// Removes an imported skill immediately — its tools stop being
+    /// offered to the router on the very next turn, not at next restart
+    /// (ADR-017's revocation requirement, the user-initiated half of
+    /// T2.2d; the signed remote block-list is the other half, not built
+    /// yet). Removing a built-in skill's id is not possible through this
+    /// function (there is nothing to remove from `imported_skills`).
+    pub fn delete_imported_skill(&self, id: String) -> Result<(), FfiError> {
+        let mut imported = lock(&self.imported_skills);
+        imported.retain(|s| s.id != id);
+        write_json(&self.imported_skills_path(), &*imported)?;
+        Ok(())
+    }
+
+    /// Replaces the local revocation list (ADR-017/T2.2d) — e.g. with a
+    /// freshly-fetched signed list, once something fetches one; nothing
+    /// does yet, so this is called only by tests today. Any already-
+    /// imported skill whose id is now on the list disappears from
+    /// `skills()`/`all_skills()` on the very next call, with no need to
+    /// reimport or restart anything.
+    pub fn set_skill_blocklist(&self, ids: Vec<String>) -> Result<(), FfiError> {
+        let mut b = lock(&self.skill_blocklist);
+        *b = ids;
+        write_json(&self.home.join("skills_blocklist.json"), &*b)?;
+        Ok(())
+    }
+
+    pub fn skill_blocklist(&self) -> Vec<String> {
+        lock(&self.skill_blocklist).clone()
+    }
+
+    // ------------------------------------------------------------ privacy center (T1.7/T2.2e)
+
+    /// Newest-first activity log: which tool ran, which skill(s) routed it,
+    /// and the outcome — never the call's own arguments or output (see
+    /// `activity_log` module docs). This is the first real, user-visible
+    /// substance behind "Privacy Center": proof of what ARA actually did,
+    /// not just a design document saying it would be logged.
+    pub fn activity_log(&self, limit: u32) -> Result<String, FfiError> {
+        to_json(&self.activity_log.list(limit as usize))
     }
 
     pub fn permissions(&self) -> Result<String, FfiError> {
@@ -1122,6 +1297,21 @@ mod tests {
         core.set_memory_enabled(id, false).unwrap();
         core.delete_memory(id).unwrap();
         assert_eq!(core.memories().unwrap(), "[]");
+
+        // T1.7/T2.2e: confirm_action's outcomes landed in the activity log,
+        // metadata only — never the fact text or the search results.
+        let log: serde_json::Value =
+            serde_json::from_str(&core.activity_log(10).unwrap()).unwrap();
+        let entries = log.as_array().unwrap();
+        assert_eq!(entries[0]["tool"], "remember", "newest first");
+        assert_eq!(entries[0]["outcome"], "done");
+        assert_eq!(entries[1]["tool"], "search_documents");
+        assert_eq!(entries[1]["outcome"], "done");
+        assert_eq!(entries[2]["tool"], "search_documents");
+        assert_eq!(entries[2]["outcome"], "denied");
+        let raw = serde_json::to_string(&log).unwrap();
+        assert!(!raw.contains("بحب الشاي"), "the log must never contain the remembered fact");
+        assert!(!raw.contains("5000"), "the log must never contain the search query/results");
     }
 
     #[test]
@@ -1157,5 +1347,193 @@ mod tests {
         assert_eq!(saved["title"], "احسب 12*12");
         core.unload_model();
         assert!(core.loaded_model().is_none());
+    }
+
+    // ADR-017/T2.2c: importing, listing, and revoking user-imported skills.
+
+    fn sample_manifest(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "version": 1,
+            "name_en": "Custom reminder helper",
+            "name_ar": "مساعد التذكير",
+            "description": "test fixture",
+            "instructions": "Use calculator for any arithmetic.",
+            "tools": ["calculator"],
+        })
+    }
+
+    #[test]
+    fn import_skill_appears_in_skills_list_and_survives_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_string_lossy().to_string();
+        let core = AraCore::new(home.clone()).unwrap();
+        let id = core
+            .import_skill(sample_manifest("custom-reminders").to_string())
+            .unwrap();
+        assert_eq!(id, "custom-reminders");
+
+        let v: serde_json::Value = serde_json::from_str(&core.skills().unwrap()).unwrap();
+        let ids: Vec<&str> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["skill"]["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"custom-reminders"));
+
+        // Restart: a fresh AraCore over the same home dir must still see it.
+        let reopened = AraCore::new(home).unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&reopened.skills().unwrap()).unwrap();
+        assert!(v2
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["skill"]["id"] == "custom-reminders"));
+    }
+
+    #[test]
+    fn imported_skill_cannot_claim_builtin_or_ara_verified_trust() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        let mut manifest = sample_manifest("sneaky-skill");
+        manifest["trust_tier"] = "ara_verified".into();
+        manifest["signature"] = "deadbeef".into();
+        core.import_skill(manifest.to_string()).unwrap();
+
+        let v: serde_json::Value = serde_json::from_str(&core.skills().unwrap()).unwrap();
+        let row = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["skill"]["id"] == "sneaky-skill")
+            .unwrap();
+        assert_eq!(
+            row["skill"]["trust_tier"], "imported",
+            "import_skill must override whatever trust_tier the file claims"
+        );
+        assert!(row["skill"]["signature"].is_null());
+    }
+
+    #[test]
+    fn import_skill_rejects_unknown_tools_and_builtin_id_collisions() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+
+        let mut bad_tool = sample_manifest("bad-tool-skill");
+        bad_tool["tools"] = serde_json::json!(["run_shell"]);
+        assert!(core.import_skill(bad_tool.to_string()).is_err());
+
+        // "math" is one of the built-in skill ids (see `builtin_skills`).
+        let collides = sample_manifest("math");
+        assert!(core.import_skill(collides.to_string()).is_err());
+    }
+
+    #[test]
+    fn delete_imported_skill_revokes_it_immediately() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        core.import_skill(sample_manifest("temp-skill").to_string())
+            .unwrap();
+        core.delete_imported_skill("temp-skill".into()).unwrap();
+
+        let v: serde_json::Value = serde_json::from_str(&core.skills().unwrap()).unwrap();
+        assert!(!v
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["skill"]["id"] == "temp-skill"));
+    }
+
+    // T2.2d (ADR-017): revocation list.
+
+    #[test]
+    fn blocklisted_id_cannot_be_imported() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        core.set_skill_blocklist(vec!["evil-skill".into()]).unwrap();
+        assert!(core.import_skill(sample_manifest("evil-skill").to_string()).is_err());
+    }
+
+    #[test]
+    fn revoking_an_already_imported_skill_removes_it_immediately_with_no_reimport_or_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        core.import_skill(sample_manifest("later-revoked").to_string())
+            .unwrap();
+        let before: serde_json::Value = serde_json::from_str(&core.skills().unwrap()).unwrap();
+        assert!(before
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["skill"]["id"] == "later-revoked"));
+
+        // A list that updates *after* the skill was already imported.
+        core.set_skill_blocklist(vec!["later-revoked".into()]).unwrap();
+
+        let after: serde_json::Value = serde_json::from_str(&core.skills().unwrap()).unwrap();
+        assert!(!after
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["skill"]["id"] == "later-revoked"));
+    }
+
+    #[test]
+    fn blocklist_persists_across_restart_with_no_network_call_needed() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_string_lossy().to_string();
+        let core = AraCore::new(home.clone()).unwrap();
+        core.set_skill_blocklist(vec!["bad-one".into(), "bad-two".into()])
+            .unwrap();
+
+        let reopened = AraCore::new(home).unwrap();
+        let mut got = reopened.skill_blocklist();
+        got.sort();
+        assert_eq!(got, vec!["bad-one".to_string(), "bad-two".to_string()]);
+    }
+
+    // T1.7 (ADR-015): Strict Offline Mode, now wired to a real setting.
+
+    #[test]
+    fn strict_offline_defaults_to_off_so_existing_installs_see_no_change() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        assert!(!core.strict_offline());
+    }
+
+    #[test]
+    fn strict_offline_setting_persists_and_blocks_cloud_calls_before_any_network_attempt() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().to_string_lossy().to_string();
+        let core = AraCore::new(home.clone()).unwrap();
+        core.set_strict_offline(true).unwrap();
+        assert!(core.strict_offline());
+
+        let err = core
+            .cloud_models("https://example.invalid".into(), "k".into())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no network request was attempted"),
+            "must be refused by the policy gate, not by a failed connection attempt: {err}"
+        );
+
+        // A fresh core over the same home dir must still have it on.
+        let reopened = AraCore::new(home).unwrap();
+        assert!(reopened.strict_offline());
+    }
+
+    #[test]
+    fn strict_offline_off_lets_a_cloud_call_actually_attempt_the_network() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        // Default is off: this must fail for a *connection* reason (no
+        // such host/server here), never the StrictOffline policy message —
+        // proving the policy gate is actually being bypassed when off, not
+        // just always blocking.
+        let err = core
+            .cloud_models("https://127.0.0.1.invalid.example".into(), "k".into())
+            .unwrap_err();
+        assert!(!err.to_string().contains("no network request was attempted"));
     }
 }

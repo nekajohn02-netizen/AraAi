@@ -13,6 +13,7 @@
 //! There is deliberately no shell / arbitrary-code tool.
 
 pub mod builtin;
+pub mod content_policy;
 pub mod parse;
 pub mod personas;
 pub mod policy;

@@ -6,6 +6,7 @@
 //! Streaming (chat tokens, download progress) uses UniFFI callback interfaces;
 //! the stateful API is the [`core::AraCore`] object.
 
+pub mod activity_log;
 pub mod conversations;
 pub mod core;
 

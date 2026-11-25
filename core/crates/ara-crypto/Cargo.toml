@@ -1,0 +1,13 @@
+[package]
+name = "ara-crypto"
+description = "Envelope encryption (AES-256-GCM) and signature verification (Ed25519) for at-rest data and signed skill manifests. Uses ring, which is already compiled into the APK via ureq's rustls backend in ara-cloud/ara-model-manager — no new native dependency (ADR-005, ADR-018)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+ring = "=0.17.14"
+
+[dev-dependencies]
+tempfile = "3"

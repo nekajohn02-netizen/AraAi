@@ -1,6 +1,18 @@
 //! Local conversation storage: one JSON file per conversation in app-private
 //! storage, written atomically (tmp + rename). Never uploaded. A SQLite store
 //! with full-text search replaces this in the search stage (G5); the API stays.
+//!
+//! **Encryption at rest (T1.8, ADR-018):** `open_with_key` makes every
+//! conversation file AES-256-GCM-sealed on disk (`ara_crypto::seal`/`open`).
+//! `open` (no key) keeps the original plaintext behaviour unchanged — a
+//! caller that does not opt in sees no behaviour change at all. The two
+//! modes are *not* interchangeable on the same directory: an encrypted
+//! store cannot read plaintext files or vice versa (by design — silently
+//! treating one as the other would be a worse failure than a clear error).
+//! Still TODO: `ara-ffi` wires a *real* Keystore-unwrapped key through from
+//! Kotlin before this is used for real — today nothing calls
+//! `open_with_key` outside this module's own tests, same honesty as
+//! `NetworkPolicy`'s `TODO(T1.7)` in `ara-cloud`.
 
 use ara_core_api::{AraError, AraResult};
 use ara_inference::ChatMessage;
@@ -36,6 +48,7 @@ pub struct ConversationSummary {
 
 pub struct ConversationStore {
     dir: PathBuf,
+    key: Option<ara_crypto::Key>,
 }
 
 fn now_ms() -> u64 {
@@ -57,7 +70,20 @@ impl ConversationStore {
     pub fn open(dir: impl Into<PathBuf>) -> AraResult<Self> {
         let dir = dir.into();
         fs::create_dir_all(&dir)?;
-        Ok(Self { dir })
+        Ok(Self { dir, key: None })
+    }
+
+    /// Same as `open`, but every conversation file is AES-256-GCM-sealed
+    /// with `key` (T1.8). `key` is raw key material already unwrapped from
+    /// an Android-Keystore-held KEK — this store never talks to Keystore
+    /// itself (see module docs and ADR-018).
+    pub fn open_with_key(dir: impl Into<PathBuf>, key: ara_crypto::Key) -> AraResult<Self> {
+        let dir = dir.into();
+        fs::create_dir_all(&dir)?;
+        Ok(Self {
+            dir,
+            key: Some(key),
+        })
     }
 
     fn path(&self, id: &str) -> PathBuf {
@@ -66,12 +92,23 @@ impl ConversationStore {
 
     fn write(&self, c: &Conversation) -> AraResult<()> {
         let tmp = self.dir.join(format!("{}.json.tmp", c.id));
-        fs::write(
-            &tmp,
-            serde_json::to_vec(c).map_err(|e| AraError::Internal(e.to_string()))?,
-        )?;
+        let plain = serde_json::to_vec(c).map_err(|e| AraError::Internal(e.to_string()))?;
+        let bytes = match &self.key {
+            Some(k) => ara_crypto::seal(k, &plain)?,
+            None => plain,
+        };
+        fs::write(&tmp, bytes)?;
         fs::rename(&tmp, self.path(&c.id))?;
         Ok(())
+    }
+
+    fn read(&self, p: &Path) -> Option<Conversation> {
+        let bytes = fs::read(p).ok()?;
+        let plain = match &self.key {
+            Some(k) => ara_crypto::open(k, &bytes).ok()?,
+            None => bytes,
+        };
+        serde_json::from_slice(&plain).ok()
     }
 
     pub fn create(&self, title: &str, persona: &str) -> AraResult<Conversation> {
@@ -93,10 +130,11 @@ impl ConversationStore {
 
     pub fn get(&self, id: &str) -> AraResult<Conversation> {
         valid_id(id)?;
-        let bytes =
-            fs::read(self.path(id)).map_err(|_| AraError::NotFound("conversation".into()))?;
-        serde_json::from_slice(&bytes)
-            .map_err(|_| AraError::InvalidInput("conversation file is corrupt".into()))
+        if !self.path(id).exists() {
+            return Err(AraError::NotFound("conversation".into()));
+        }
+        self.read(&self.path(id))
+            .ok_or_else(|| AraError::InvalidInput("conversation file is corrupt".into()))
     }
 
     pub fn append(&self, id: &str, msgs: &[ChatMessage]) -> AraResult<()> {
@@ -130,7 +168,7 @@ impl ConversationStore {
             if p.extension().and_then(|x| x.to_str()) != Some("json") {
                 continue;
             }
-            if let Some(c) = read(&p) {
+            if let Some(c) = self.read(&p) {
                 out.push(ConversationSummary {
                     message_count: c.messages.len(),
                     persona: c.persona.clone(),
@@ -143,10 +181,6 @@ impl ConversationStore {
         out.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
         Ok(out)
     }
-}
-
-fn read(p: &Path) -> Option<Conversation> {
-    serde_json::from_slice(&fs::read(p).ok()?).ok()
 }
 
 fn clean_title(t: &str) -> String {
@@ -200,5 +234,60 @@ mod tests {
         fs::write(d.path().join("broken.json"), b"{not json").unwrap();
         s.create_t("ok").unwrap();
         assert_eq!(s.list().unwrap().len(), 1);
+    }
+
+    // T1.8 (ADR-018): conversations are unreadable on disk without the key.
+    #[test]
+    fn encrypted_store_round_trips_and_file_is_not_plaintext_on_disk() {
+        let d = tempfile::tempdir().unwrap();
+        let key = ara_crypto::generate_key().unwrap();
+        let s = ConversationStore::open_with_key(d.path(), key).unwrap();
+        let c = s.create("خطة السفر", "general").unwrap();
+        s.append(&c.id, &[ChatMessage::new(Role::User, "سر لا يجب أن يظهر في الملف")])
+            .unwrap();
+
+        let on_disk = fs::read(d.path().join(format!("{}.json", c.id))).unwrap();
+        let on_disk_text = String::from_utf8_lossy(&on_disk);
+        assert!(
+            !on_disk_text.contains("سر لا يجب أن يظهر في الملف"),
+            "raw file bytes must not contain the plaintext message"
+        );
+        assert!(!on_disk_text.contains("خطة السفر"));
+
+        // Opening with the real key recovers it exactly.
+        let reopened = ConversationStore::open_with_key(d.path(), key).unwrap();
+        let got = reopened.get(&c.id).unwrap();
+        assert_eq!(got.title, "خطة السفر");
+        assert_eq!(got.messages.len(), 1);
+    }
+
+    #[test]
+    fn encrypted_store_rejects_the_wrong_key() {
+        let d = tempfile::tempdir().unwrap();
+        let key = ara_crypto::generate_key().unwrap();
+        let other_key = ara_crypto::generate_key().unwrap();
+        let s = ConversationStore::open_with_key(d.path(), key).unwrap();
+        let c = s.create_t("ok").unwrap();
+
+        let wrong = ConversationStore::open_with_key(d.path(), other_key).unwrap();
+        assert!(
+            wrong.get(&c.id).is_err(),
+            "the wrong key must not be able to read a storage file; a data-recovery \
+             test like this is exactly what T1.8's acceptance criterion asks for"
+        );
+    }
+
+    #[test]
+    fn plaintext_and_encrypted_stores_cannot_silently_read_each_other() {
+        let d = tempfile::tempdir().unwrap();
+        let plain = ConversationStore::open(d.path()).unwrap();
+        let c = plain.create_t("plain").unwrap();
+
+        let key = ara_crypto::generate_key().unwrap();
+        let encrypted = ConversationStore::open_with_key(d.path(), key).unwrap();
+        assert!(
+            encrypted.get(&c.id).is_err(),
+            "a plaintext file must not be misread as a valid encrypted one"
+        );
     }
 }

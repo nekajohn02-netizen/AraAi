@@ -107,6 +107,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ara-crypto"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
+ "ring",
+ "tempfile",
+]
+
+[[package]]
 name = "ara-device-profiler"
 version = "0.1.0"
 dependencies = [
@@ -122,6 +131,7 @@ dependencies = [
  "ara-cloud",
  "ara-coordinator",
  "ara-core-api",
+ "ara-crypto",
  "ara-device-profiler",
  "ara-inference",
  "ara-missions",
@@ -220,6 +230,7 @@ name = "ara-tools"
 version = "0.1.0"
 dependencies = [
  "ara-core-api",
+ "ara-crypto",
  "serde",
  "serde_json",
 ]

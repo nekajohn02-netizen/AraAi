@@ -30,6 +30,7 @@ ara-search = { path = "../ara-search" }
 ara-cloud = { path = "../ara-cloud" }
 ara-missions = { path = "../ara-missions" }
 ara-sentinel = { path = "../ara-sentinel" }
+ara-crypto = { path = "../ara-crypto" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
