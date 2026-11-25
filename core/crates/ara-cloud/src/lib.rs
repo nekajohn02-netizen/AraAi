@@ -126,8 +126,31 @@ fn short(s: &str) -> String {
     s.chars().take(120).collect()
 }
 
+/// Gate checked before any socket is opened — not after a request fails.
+/// `StrictOffline` means exactly that: this call site must not attempt a
+/// network connection at all, so the error has to come *before* `agent()`
+/// is ever built, not from catching a connection error afterwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkPolicy {
+    Online,
+    StrictOffline,
+}
+
+impl NetworkPolicy {
+    fn allow(self) -> AraResult<()> {
+        match self {
+            NetworkPolicy::Online => Ok(()),
+            NetworkPolicy::StrictOffline => Err(AraError::Unsupported(
+                "strict offline mode is on: no network request was attempted".into(),
+            )),
+        }
+    }
+}
+
 /// Lists model ids (GET /models) — also serves as "test connection".
-pub fn list_models(base_url: &str, api_key: &str) -> AraResult<Vec<String>> {
+pub fn list_models(base_url: &str, api_key: &str, policy: NetworkPolicy) -> AraResult<Vec<String>> {
+    policy.allow()?;
     let base = validate_base_url(base_url)?;
     let resp = agent()
         .get(&format!("{base}/models"))
@@ -159,6 +182,7 @@ pub struct CloudModel {
     model: String,
     context: u32,
     shield_enabled: bool,
+    policy: NetworkPolicy,
     /// Placeholders created so far (inspectable for the UI).
     pub last_redactions: usize,
 }
@@ -170,6 +194,7 @@ impl CloudModel {
         model: &str,
         context: u32,
         shield: bool,
+        policy: NetworkPolicy,
     ) -> AraResult<Self> {
         if api_key.trim().is_empty() || model.trim().is_empty() {
             return Err(AraError::InvalidInput(
@@ -182,6 +207,7 @@ impl CloudModel {
             model: model.trim().to_string(),
             context: context.clamp(1024, 131_072),
             shield_enabled: shield,
+            policy,
             last_redactions: 0,
         })
     }
@@ -217,6 +243,7 @@ impl LoadedModel for CloudModel {
         cancel: &CancellationToken,
         on_text: &mut dyn FnMut(&str),
     ) -> AraResult<GenerationStats> {
+        self.policy.allow()?;
         let started = Instant::now();
         let mut shield = Shield::new();
         let msgs: Vec<serde_json::Value> = messages
@@ -393,6 +420,7 @@ mod tests {
             model: "kimi-test".into(),
             context: 8192,
             shield_enabled: true,
+            policy: NetworkPolicy::Online,
             last_redactions: 0,
         }
     }
@@ -464,8 +492,76 @@ mod tests {
 
     #[test]
     fn constructor_validates() {
-        assert!(CloudModel::new("http://x.com", "k", "m", 8192, true).is_err());
-        assert!(CloudModel::new("https://x.com/v1", "", "m", 8192, true).is_err());
-        assert!(CloudModel::new("https://x.com/v1", "k", "m", 8192, true).is_ok());
+        let online = NetworkPolicy::Online;
+        assert!(CloudModel::new("http://x.com", "k", "m", 8192, true, online).is_err());
+        assert!(CloudModel::new("https://x.com/v1", "", "m", 8192, true, online).is_err());
+        assert!(CloudModel::new("https://x.com/v1", "k", "m", 8192, true, online).is_ok());
+    }
+
+    /// T1.7: proves Strict Offline Mode blocks *before* any socket opens,
+    /// not by catching a failed connection afterwards. A raw TCP listener
+    /// stands in for "the proxy/connections log" the roadmap's acceptance
+    /// criterion asks to check: if a connection attempt were made, this
+    /// listener would see it arrive, with or without TLS or a real HTTP
+    /// response behind it.
+    #[test]
+    fn strict_offline_mode_never_opens_a_socket() {
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("https://127.0.0.1:{port}");
+        let connections = Arc::new(AtomicUsize::new(0));
+        let c2 = connections.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let watcher = std::thread::spawn(move || {
+            while !s2.load(Ordering::SeqCst) {
+                if listener.accept().is_ok() {
+                    c2.fetch_add(1, Ordering::SeqCst);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+
+        // StrictOffline: list_models() and generate_chat() must both refuse
+        // before touching the network — no accept(), no matter how long we
+        // wait for one.
+        let err = list_models(&url, "k", NetworkPolicy::StrictOffline).unwrap_err();
+        assert!(err.to_string().contains("strict offline"));
+        let mut m = model_for(&url);
+        m.policy = NetworkPolicy::StrictOffline;
+        let err = m
+            .generate_chat(
+                &[ChatMessage::new(Role::User, "hi")],
+                &GenerationParams::default(),
+                &CancellationToken::new(),
+                &mut |_| {},
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("strict offline"));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            0,
+            "StrictOffline must never cause a connection attempt"
+        );
+
+        // Sanity check the harness itself: Online mode (with no real server
+        // behind the TLS handshake) must still produce at least one
+        // connection attempt, proving a silent bug elsewhere isn't what
+        // made the StrictOffline count zero above.
+        let _ = list_models(&url, "k", NetworkPolicy::Online); // expected to fail (no real TLS server)
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            connections.load(Ordering::SeqCst) >= 1,
+            "Online mode must actually attempt a connection"
+        );
+
+        stop.store(true, Ordering::SeqCst);
+        watcher.join().unwrap();
     }
 }

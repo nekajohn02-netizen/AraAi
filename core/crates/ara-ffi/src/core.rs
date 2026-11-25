@@ -750,7 +750,11 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
 
     /// "Test connection": lists the provider's models with this key.
     pub fn cloud_models(&self, base_url: String, api_key: String) -> Result<Vec<String>, FfiError> {
-        Ok(ara_cloud::list_models(&base_url, &api_key)?)
+        // TODO(T1.7): thread a real Strict Offline Mode setting through here
+        // once it has an Android toggle; the enforcement primitive itself
+        // (`NetworkPolicy::StrictOffline`) is implemented and tested in
+        // ara-cloud today.
+        Ok(ara_cloud::list_models(&base_url, &api_key, ara_cloud::NetworkPolicy::Online)?)
     }
 
     /// Makes a configured provider the active model. Requires consent. The
@@ -767,7 +771,14 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
             )
             .into());
         }
-        let m = ara_cloud::CloudModel::new(&p.base_url, &api_key, &p.model, 32_768, p.shield)?;
+        let m = ara_cloud::CloudModel::new(
+            &p.base_url,
+            &api_key,
+            &p.model,
+            32_768,
+            p.shield,
+            ara_cloud::NetworkPolicy::Online, // TODO(T1.7): see cloud_models above
+        )?;
         *lock(&self.model) = Some(Loaded {
             id: format!("cloud:{}/{}", p.id, p.model),
             model: Box::new(m),
