@@ -3,6 +3,7 @@
 **Research date:** 2026-11-25
 **Method:** Direct review of each competitor's own GitHub repository (source code, commit history, releases, README/docs), official product pages, and the Google Play listing for Qandeel. No competitor app was installed or hands-on tested. GitHub API (`gh api`) was used to pull repo metadata, commit logs, release tags, README files, and to grep source trees for specific features (localization files, encryption code, MCP/skills folders, etc.) rather than trusting marketing copy.
 **Supersedes:** The competitor table in `docs/ROADMAP_TASKS.md` §2, which was explicitly flagged there as unverified (pasted from another AI's analysis, not checked against source). This document is the verification task (T0.4) referenced in that file. Where this document's findings disagree with that table, trust this document.
+**Later update (same day, 2026-11-25):** `reports/تحديث تحليل منافسين ARA.md` re-checked this analysis a few hours later and found one material change — Google AI Edge Gallery shipped real AES-GCM at-rest encryption (commit `1c7b534`, 2026-11-12), the first found in any open-source competitor here — plus a new investigation item (the Nile-Chat Egyptian-Arabic model family) and a revised P1 roadmap ordering. Where the two disagree, trust the later report.
 
 **Classification used for every claim below:**
 - 🟢 **Verified** — confirmed in the competitor's own source code, commit/release history, or detailed official technical docs.
