@@ -14,6 +14,7 @@
 | المحادثات: معرفات آمنة ضد path traversal، كتابة ذرية، تجاهل الملف التالف | `rejects_path_traversal_and_survives_corruption` |
 | الأدوات: schema صارم، precheck (https، هاتف، تاريخ)، صلاحيات، تأكيد إلزامي للأثر الخارجي، حد معدل، حد حلقات الوكيل (3) وحد الاستدعاءات (4/دور) | 26 اختبار ara-tools + 6 coordinator |
 | مخرجات النموذج غير موثوقة: استدعاء مجهول/مشوه يُرفض، نتائج الأدوات تُعلَّم كبيانات لا تعليمات | `invalid_or_unknown_calls_are_denied`، `malformed_unterminated_and_excess_calls_are_rejected` |
+| حقن تعليمات من محتوى ملف (مهما كان موديل مُخترَق يحاول تنفيذها، ومهما كانت الصلاحية "مسموح دائمًا"): صفر تنفيذ صامت عبر الخط الكامل (بحث حقيقي → `guard` → تأكيد) | `injected_document_content_cannot_trigger_a_silent_external_action` (7 هجمات) — T1.9 |
 | Kotlin ينفذ فقط قائمة ثابتة من الأدوات، ويعيد فحص https | `HostActions.kt` |
 | لا نسخ احتياطي سحابي/نقل أجهزة | `allowBackup=false` + `data_extraction_rules.xml` |
 | لا إرسال خفي: الرسائل/المنشورات/المكالمات تفتح التطبيق الهدف والمستخدم يضغط إرسال | ADR-007 |
