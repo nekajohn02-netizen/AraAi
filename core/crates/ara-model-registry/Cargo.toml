@@ -1,0 +1,11 @@
+[package]
+name = "ara-model-registry"
+description = "Model metadata catalog with validation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true

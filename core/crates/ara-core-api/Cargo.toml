@@ -1,0 +1,13 @@
+[package]
+name = "ara-core-api"
+description = "Shared ARA core types: errors, request ids, events, cancellation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

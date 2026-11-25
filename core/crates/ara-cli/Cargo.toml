@@ -1,0 +1,23 @@
+[package]
+name = "ara-cli"
+description = "Developer CLI: profile, recommend, download, bench and chat with the ARA core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "ara"
+path = "src/main.rs"
+
+[dependencies]
+ara-core-api.workspace = true
+ara-model-registry.workspace = true
+ara-device-profiler.workspace = true
+ara-model-selector = { path = "../ara-model-selector" }
+ara-model-manager = { path = "../ara-model-manager" }
+ara-inference = { path = "../ara-inference" }
+ara-tools = { path = "../ara-tools" }
+ara-coordinator = { path = "../ara-coordinator" }
+ara-search = { path = "../ara-search" }
+serde_json.workspace = true

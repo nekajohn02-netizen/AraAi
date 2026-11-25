@@ -1,0 +1,12 @@
+[package]
+name = "ara-model-selector"
+description = "Filters and ranks models against a device profile and measured benchmarks."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+ara-model-registry.workspace = true
+ara-device-profiler.workspace = true
+serde.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "ara-cloud"
+description = "API Hub: OpenAI-compatible cloud providers with streaming, cancellation and a privacy shield (PII redaction)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+ara-inference = { path = "../ara-inference", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "=3.5.1", default-features = false, features = ["rustls"] }

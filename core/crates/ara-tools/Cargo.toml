@@ -1,0 +1,11 @@
+[package]
+name = "ara-tools"
+description = "Tool & skill registry: manifests, argument validation, permission policy, confirmation, built-in local tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true

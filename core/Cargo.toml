@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+ara-core-api = { path = "crates/ara-core-api" }
+ara-model-registry = { path = "crates/ara-model-registry" }
+ara-device-profiler = { path = "crates/ara-device-profiler" }
+
+# Small, fast native library for the APK.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Not "symbols": uniffi-bindgen reads metadata symbols from the library.
+# AGP strips the packaged .so files.
+strip = "debuginfo"
+
+# Keep dev builds small (llama.cpp debug info alone is several GB).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

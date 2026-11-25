@@ -1,0 +1,39 @@
+[package]
+name = "ara-ffi"
+description = "UniFFI bridge exposing the ARA core to Kotlin/Android."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "ara_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+ara-core-api.workspace = true
+ara-model-registry.workspace = true
+ara-device-profiler.workspace = true
+ara-model-selector = { path = "../ara-model-selector" }
+ara-model-manager = { path = "../ara-model-manager" }
+ara-inference = { path = "../ara-inference" }
+ara-tools = { path = "../ara-tools" }
+ara-coordinator = { path = "../ara-coordinator" }
+ara-search = { path = "../ara-search" }
+ara-cloud = { path = "../ara-cloud" }
+ara-missions = { path = "../ara-missions" }
+ara-sentinel = { path = "../ara-sentinel" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uniffi = "0.29"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

@@ -1,0 +1,14 @@
+[package]
+name = "ara-coordinator"
+description = "Routes a user turn through skills, the local model and tools (agent loop) with a bounded context."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+ara-inference = { path = "../ara-inference", default-features = false }
+ara-tools = { path = "../ara-tools" }
+ara-search = { path = "../ara-search" }
+serde.workspace = true
+serde_json.workspace = true
