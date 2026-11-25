@@ -313,11 +313,12 @@ impl SearchIndex {
         let mut hits: Vec<(Hit, Option<String>)> = rows.collect::<Result<_, _>>().map_err(db_err)?;
         // Point the citation at the best-matching line inside the chunk,
         // then resolve that line to a page number for paginated formats.
-        let words: Vec<String> = normalize(query)
-            .split_whitespace()
-            .filter(|w| w.chars().count() >= 2)
-            .map(str::to_string)
-            .collect();
+        // Uses the *expanded* terms, not just the literal query words: a hit
+        // found only through a crosswalk/alias expansion (e.g. an English
+        // query landing on an Arabic-only document via "task" -> "مهمة")
+        // has none of its literal words in the text at all, so scoring on
+        // literal words alone would pick an arbitrary line instead of the
+        // one that actually matched.
         for (h, page_starts_json) in &mut hits {
             let best = h
                 .text
@@ -325,7 +326,7 @@ impl SearchIndex {
                 .enumerate()
                 .map(|(i, l)| {
                     let nl = normalize(l);
-                    (words.iter().filter(|w| nl.contains(w.as_str())).count(), i)
+                    (expanded.iter().filter(|w| nl.contains(w.as_str())).count(), i)
                 })
                 .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)))
                 .map(|(_, i)| i)
@@ -614,6 +615,24 @@ mod tests {
         ix.add_document("note.txt", b"hello world").unwrap();
         let h = ix.search("hello", 5).unwrap();
         assert_eq!(h[0].page, None);
+    }
+
+    #[test]
+    fn crosswalk_driven_hits_cite_the_right_line_not_just_the_right_document() {
+        // None of this English query's literal words appear anywhere in the
+        // document: the hit exists only because "task" expands to "مهمة"
+        // (crosswalk) and matches line 3. The old code scored every line 0
+        // on literal overlap and always picked the last line by its tie
+        // rule — this pins the regression.
+        let mut ix = SearchIndex::open_in_memory().unwrap();
+        ix.add_document(
+            "note.txt",
+            "مقدمة\nاجتماع الفريق\nفيه مهمة جديدة لازم تخلص بكرة\nملاحظة ختامية".as_bytes(),
+        )
+        .unwrap();
+        let h = ix.search("what is the next task", 5).unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].line, 3, "must cite the line that actually matched");
     }
 
     #[test]
