@@ -1,5 +1,14 @@
 package ai.ara.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -59,22 +69,75 @@ private fun visibleBubbles(conv: JSONObject): List<Bubble> =
     }
 
 @Composable
-fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
+fun ChatScreen(
+    bridge: CoreBridge,
+    onNeedModel: () -> Unit,
+    prefillText: String? = null,
+    speakReplies: Boolean = false,
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var convId by rememberSaveable { mutableStateOf<String?>(null) }
     val bubbles = remember { mutableStateListOf<Bubble>() }
     var streaming by remember { mutableStateOf<String?>(null) }
     var cancel by remember { mutableStateOf<CancelHandle?>(null) }
-    var input by rememberSaveable { mutableStateOf("") }
+    var input by rememberSaveable(prefillText) { mutableStateOf(prefillText.orEmpty()) }
     var pending by remember { mutableStateOf<JSONObject?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf<String?>(null) }
     var persona by rememberSaveable { mutableStateOf("general") }
     var personas by remember { mutableStateOf(emptyList<JSONObject>()) }
-    val arabic = java.util.Locale.getDefault().language == "ar"
+    val arabic = isArabicLocale()
     val list = rememberLazyListState()
+
+    // Voice I/O — Android's own on-device APIs only, see Voice.kt. The mic
+    // button fills `input` for the user to review/edit, same as any other
+    // prefilled text in this app; it never sends on its own.
+    var listening by remember { mutableStateOf(false) }
+    val voiceInput = remember { VoiceInput(ctx) }
+    val voiceOutput = remember { VoiceOutput(ctx) }
+    val speechLanguageTag = if (arabic) "ar-EG" else "en-US"
+    val voiceInputLabel = stringResource(R.string.voice_input_label)
+    val voiceListeningLabel = stringResource(R.string.voice_listening)
+    val voiceNotAvailableMsg = stringResource(R.string.voice_not_available)
+    val voiceNoPermissionMsg = stringResource(R.string.voice_no_permission)
+    val voiceNoSpeechMsg = stringResource(R.string.voice_no_speech)
+    DisposableEffect(Unit) {
+        onDispose {
+            voiceInput.stop()
+            voiceOutput.shutdown()
+        }
+    }
+    fun startListening() {
+        listening = true
+        voiceInput.start(
+            speechLanguageTag,
+            onPartial = { input = it },
+            onFinal = { text -> input = text; listening = false },
+            onError = { err ->
+                listening = false
+                notice = when (err) {
+                    VoiceError.NotAvailable -> voiceNotAvailableMsg
+                    VoiceError.NoPermission -> voiceNoPermissionMsg
+                    VoiceError.NoSpeech, VoiceError.Other -> voiceNoSpeechMsg
+                }
+            },
+        )
+    }
+    val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startListening() else notice = voiceNoPermissionMsg
+    }
+    fun onMicTap() {
+        if (listening) {
+            voiceInput.stop()
+            listening = false
+        } else if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startListening()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     LaunchedEffect(Unit) { personas = bridge.personas() }
     LaunchedEffect(convId) {
@@ -105,7 +168,10 @@ fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
                 val id = convId ?: bridge.io { createConversation("", persona) }.also { convId = it }
                 val r = bridge.send(id, text, handle) { t -> streaming = (streaming ?: "") + t }
                 val shown = r.optString("text").ifBlank { streaming.orEmpty() }.trim()
-                if (shown.isNotEmpty()) bubbles.add(Bubble(false, shown))
+                if (shown.isNotEmpty()) {
+                    bubbles.add(Bubble(false, shown))
+                    if (speakReplies) voiceOutput.speak(shown, speechLanguageTag)
+                }
                 pending = r.optJSONObject("pending_confirmation")
                 r.optJSONArray("tool_events")?.objects()?.forEach { e ->
                     val o = e.getJSONObject("outcome")
@@ -157,7 +223,7 @@ fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
         }
         HorizontalDivider()
 
-        if (loaded == null) {
+        AnimatedVisibility(loaded == null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis()))) {
             Card(Modifier.fillMaxWidth().padding(12.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.need_model))
@@ -168,13 +234,16 @@ fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), state = list,
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(bubbles) { BubbleView(it) }
+            items(bubbles) { BubbleView(it, Modifier.animateItem()) }
             streaming?.let { s -> item { BubbleView(Bubble(false, s.ifEmpty { "…" })) } }
         }
 
-        pending?.let { p ->
-            Card(Modifier.fillMaxWidth().padding(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+        AnimatedVisibility(pending != null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis()))) {
+            val p = pending
+            if (p != null) Card(
+                Modifier.fillMaxWidth().padding(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+            ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.confirm_title), style = MaterialTheme.typography.titleSmall)
                     Text(p.getString("summary"))
@@ -197,11 +266,28 @@ fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
                 }
             }
         }
-        notice?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) }
+        AnimatedVisibility(notice != null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis()))) {
+            Text(
+                notice.orEmpty(),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 12.dp).liveRegionAnnounce(),
+            )
+        }
 
+        if (prefillText != null) {
+            Text(
+                stringResource(R.string.process_text_prefill_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+        }
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, Modifier.weight(1f),
                 placeholder = { Text(stringResource(R.string.message_hint)) }, maxLines = 5)
+            TextButton(::onMicTap, Modifier.padding(start = 4.dp), enabled = cancel == null) {
+                Text(if (listening) voiceListeningLabel else voiceInputLabel)
+            }
             if (cancel != null) OutlinedButton({ cancel?.cancel() }, Modifier.padding(start = 8.dp)) {
                 Text(stringResource(R.string.stop))
             } else Button(::send, Modifier.padding(start = 8.dp), enabled = loaded != null && input.isNotBlank()) {
@@ -218,10 +304,11 @@ fun ChatScreen(bridge: CoreBridge, onNeedModel: () -> Unit) {
 }
 
 @Composable
-private fun BubbleView(b: Bubble) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (b.fromUser) Alignment.CenterEnd else Alignment.CenterStart) {
+private fun BubbleView(b: Bubble, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth(), contentAlignment = if (b.fromUser) Alignment.CenterEnd else Alignment.CenterStart) {
         Text(b.text, Modifier
             .widthIn(max = 320.dp)
+            .animateContentSize(tween(motionMillis()))
             .background(
                 if (b.fromUser) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant,
@@ -234,25 +321,52 @@ private fun BubbleView(b: Bubble) {
 private fun HistoryDialog(bridge: CoreBridge, onDismiss: () -> Unit, onOpen: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf(emptyList<JSONObject>()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var confirmDelete by remember { mutableStateOf<JSONObject?>(null) }
     var reload by remember { mutableStateOf(0) }
     LaunchedEffect(reload) { items = bridge.conversations().objects() }
+    val shown = remember(items, query) {
+        if (query.isBlank()) items else items.filter { it.getString("title").contains(query, ignoreCase = true) }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onDismiss) { Text(stringResource(R.string.close)) } },
         title = { Text(stringResource(R.string.history)) },
         text = {
-            if (items.isEmpty()) Text(stringResource(R.string.no_conversations))
-            LazyColumn {
-                items(items) { c ->
-                    Row(Modifier.fillMaxWidth().clickable { onOpen(c.getString("id")) }.padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(c.getString("title"), Modifier.weight(1f))
-                        TextButton({
-                            scope.launch { bridge.io { deleteConversation(c.getString("id")) }; reload++ }
-                        }) { Text(stringResource(R.string.delete)) }
+            Column {
+                if (items.size > 5) OutlinedTextField(
+                    query, { query = it }, Modifier.fillMaxWidth(),
+                    placeholder = { Text(stringResource(R.string.search_conversations)) }, singleLine = true,
+                )
+                if (shown.isEmpty()) Text(stringResource(R.string.no_conversations))
+                LazyColumn {
+                    items(shown, key = { it.getString("id") }) { c ->
+                        Row(
+                            Modifier.fillMaxWidth().animateItem().clickable { onOpen(c.getString("id")) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(c.getString("title"), Modifier.weight(1f))
+                            TextButton({ confirmDelete = c }) { Text(stringResource(R.string.delete)) }
+                        }
                     }
                 }
             }
         },
     )
+
+    confirmDelete?.let { c ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text(stringResource(R.string.delete_conversation_title)) },
+            text = { Text(stringResource(R.string.delete_conversation_body)) },
+            confirmButton = {
+                Button({
+                    confirmDelete = null
+                    scope.launch { bridge.io { deleteConversation(c.getString("id")) }; reload++ }
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton({ confirmDelete = null }) { Text(stringResource(R.string.decline)) } },
+        )
+    }
 }

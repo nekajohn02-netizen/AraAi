@@ -31,13 +31,18 @@ pub enum PolicyViolation {
 }
 
 impl PolicyViolation {
+    /// Shown to the user verbatim (Arabic, by the project owner's explicit
+    /// request 2026-11-26): a clear refusal, the religious ruling, a brief
+    /// reminder of accountability, and a kind redirect — not a lecture.
+    /// This exact wording is what gets refused *to the person*, so it is
+    /// deliberately not a bare technical string like "not supported".
     pub fn message(self) -> &'static str {
         match self {
             PolicyViolation::Music => {
-                "music/song generation is not offered by ARA (policy decision)"
+                "معلش، آرا ما تقدرش تساعدك في عمل موسيقى أو أغاني. سماع الموسيقى والغناء بهذا المعنى حرام شرعًا عند كثير من أهل العلم، وكل واحد مسؤول قدام ربنا سبحانه وتعالى يوم القيامة عن اللي يسمعه ويعمله. ابعد عنها واستبدلها بحاجة تقرّبك لربنا، وأنا موجود أساعدك في أي حاجة تانية تنفعك."
             }
             PolicyViolation::Explicit => {
-                "explicit/sexual content generation is not offered by ARA (policy decision)"
+                "معلش، آرا ما تقدرش تساعدك في طلب زي ده. المحتوى الجنسي/الإباحي حرام شرعًا ومعصية لله سبحانه وتعالى، وفيها حساب وعقاب يوم القيامة لمن استمر عليها بلا توبة. اتق الله وارجع لربك، وأنا موجود أساعدك في أي حاجة تانية تنفعك في دنياك وآخرتك."
             }
         }
     }

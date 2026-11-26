@@ -55,6 +55,14 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
     var shield by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf<String?>(null) }
     var consentFor by remember { mutableStateOf<JSONObject?>(null) }
+    var confirmDelete by remember { mutableStateOf<JSONObject?>(null) }
+    // Captured here (composable scope) rather than via `ctx.getString(...)`
+    // inside the lambdas below: that call is not configuration-aware and
+    // would keep showing the old language's text after a locale change
+    // until the next unrelated recomposition (Android Lint
+    // `LocalContextGetResourceValueCall`).
+    val keyMissingMsg = stringResource(R.string.key_missing)
+    val connectionOkTemplate = stringResource(R.string.connection_ok)
 
     LaunchedEffect(reload) {
         presets = bridge.io { JSONArray(cloudPresets()) }.objects()
@@ -63,9 +71,9 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
 
     fun activate(p: JSONObject) = scope.launch {
         val key = vault.get(p.getString("id"))
-        if (key == null) { status = ctx.getString(R.string.key_missing); return@launch }
+        if (key == null) { status = keyMissingMsg; return@launch }
         status = try { bridge.io { useCloudModel(p.getString("id"), key) }; onChanged(); null }
-        catch (e: Exception) { e.message }
+        catch (e: Exception) { e.rethrowIfCancellation().message }
     }
 
     Card(Modifier.fillMaxWidth()) {
@@ -82,12 +90,7 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
                     }
                     if (p.optBoolean("consent")) Button({ activate(p) }) { Text(stringResource(R.string.use_model)) }
                     else OutlinedButton({ consentFor = p }) { Text(stringResource(R.string.allow_sending)) }
-                    TextButton({
-                        scope.launch {
-                            bridge.io { deleteProvider(p.getString("id")) }
-                            vault.remove(p.getString("id")); reload++; onChanged()
-                        }
-                    }) { Text(stringResource(R.string.delete)) }
+                    TextButton({ confirmDelete = p }) { Text(stringResource(R.string.delete)) }
                 }
             }
 
@@ -108,8 +111,8 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
                     scope.launch {
                         status = try {
                             available = bridge.io { cloudModels(baseUrl, apiKey) }
-                            ctx.getString(R.string.connection_ok, available.size)
-                        } catch (e: Exception) { e.message }
+                            String.format(connectionOkTemplate, available.size)
+                        } catch (e: Exception) { e.rethrowIfCancellation().message }
                     }
                 }) { Text(stringResource(R.string.test_connection)) }
                 if (available.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -130,11 +133,11 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
                             vault.put(id, apiKey)
                             apiKey = ""; preset = null; reload++
                             null
-                        } catch (e: Exception) { e.message }
+                        } catch (e: Exception) { e.rethrowIfCancellation().message }
                     }
                 }) { Text(stringResource(R.string.save)) }
             }
-            status?.let { Text(it, color = MaterialTheme.colorScheme.secondary) }
+            status?.let { Text(it, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.liveRegionAnnounce()) }
         }
     }
 
@@ -149,6 +152,24 @@ fun ApiHubSection(bridge: CoreBridge, onChanged: () -> Unit) {
                 }) { Text(stringResource(R.string.agree)) }
             },
             dismissButton = { TextButton({ consentFor = null }) { Text(stringResource(R.string.decline)) } },
+        )
+    }
+
+    confirmDelete?.let { p ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text(stringResource(R.string.delete_provider_title)) },
+            text = { Text(stringResource(R.string.delete_provider_body, p.getString("name"))) },
+            confirmButton = {
+                Button({
+                    confirmDelete = null
+                    scope.launch {
+                        bridge.io { deleteProvider(p.getString("id")) }
+                        vault.remove(p.getString("id")); reload++; onChanged()
+                    }
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton({ confirmDelete = null }) { Text(stringResource(R.string.decline)) } },
         )
     }
 }

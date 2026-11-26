@@ -18,8 +18,10 @@
 
 use ara_core_api::{AraError, AraResult};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
+use ring::pbkdf2;
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{Ed25519KeyPair, KeyPair, UnparsedPublicKey, ED25519};
+use std::num::NonZeroU32;
 
 pub const KEY_LEN: usize = 32;
 pub type Key = [u8; KEY_LEN];
@@ -91,6 +93,48 @@ pub fn open(key: &Key, blob: &[u8]) -> AraResult<Vec<u8>> {
             AraError::InvalidInput("decryption failed: wrong key or corrupted data".into())
         })?;
     Ok(plain.to_vec())
+}
+
+pub const SALT_LEN: usize = 16;
+
+/// Iterations for `derive_key_from_passphrase`. 600,000 is OWASP's current
+/// PBKDF2-HMAC-SHA256 baseline (2023 cheat sheet); this uses a lower,
+/// still-reasonable 210,000 as an explicit mobile-hardware tradeoff — this
+/// runs synchronously on a phone CPU with no hardware acceleration for
+/// PBKDF2 (unlike AES-GCM), and a user export/restore is a rare, deliberate
+/// action, not a login a phone has to do many times a day. Documented here
+/// rather than silently chosen so a future change has the reasoning to
+/// react to, not just a number.
+const PBKDF2_ITERATIONS: u32 = 210_000;
+
+/// A fresh random salt for `derive_key_from_passphrase`. Not secret — it is
+/// stored alongside the ciphertext it was used for (same pattern as the
+/// nonce inside `seal`'s own output) so the same derivation can be repeated
+/// on import.
+pub fn random_salt() -> AraResult<[u8; SALT_LEN]> {
+    let rng = SystemRandom::new();
+    let mut salt = [0u8; SALT_LEN];
+    rng.fill(&mut salt)
+        .map_err(|_| AraError::Internal("random generation failed".into()))?;
+    Ok(salt)
+}
+
+/// Derives a 256-bit key from a user-chosen passphrase and a salt
+/// (PBKDF2-HMAC-SHA256). For a portable encrypted export the user must be
+/// able to re-derive the same key on another device with just the
+/// passphrase they remember — unlike `generate_key`'s random DEK (meant to
+/// be wrapped by an Android Keystore KEK and never typed by a human), this
+/// is deliberately deterministic given the same passphrase and salt.
+pub fn derive_key_from_passphrase(passphrase: &str, salt: &[u8; SALT_LEN]) -> Key {
+    let mut key = [0u8; KEY_LEN];
+    pbkdf2::derive(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        NonZeroU32::new(PBKDF2_ITERATIONS).expect("non-zero constant"),
+        salt,
+        passphrase.as_bytes(),
+        &mut key,
+    );
+    key
 }
 
 /// Generates a fresh Ed25519 keypair: `(pkcs8_private_bytes, raw_public_bytes)`.
@@ -177,6 +221,32 @@ mod tests {
         let mut blob = seal(&key, b"x").unwrap();
         blob[0] = 99; // unknown format version
         assert!(open(&key, &blob).is_err());
+    }
+
+    #[test]
+    fn passphrase_derivation_is_deterministic_and_salt_and_passphrase_both_matter() {
+        let salt = random_salt().unwrap();
+        let k1 = derive_key_from_passphrase("correct horse battery staple", &salt);
+        let k2 = derive_key_from_passphrase("correct horse battery staple", &salt);
+        assert_eq!(k1, k2, "same passphrase + salt must give the same key");
+
+        let other_salt = random_salt().unwrap();
+        assert_ne!(other_salt, salt, "random_salt must not repeat");
+        let k3 = derive_key_from_passphrase("correct horse battery staple", &other_salt);
+        assert_ne!(k1, k3, "a different salt must give a different key");
+
+        let k4 = derive_key_from_passphrase("a different passphrase", &salt);
+        assert_ne!(k1, k4, "a different passphrase must give a different key");
+    }
+
+    #[test]
+    fn passphrase_derived_key_works_with_seal_and_open() {
+        let salt = random_salt().unwrap();
+        let key = derive_key_from_passphrase("my recovery passphrase", &salt);
+        let blob = seal(&key, b"exported data").unwrap();
+        assert_eq!(open(&key, &blob).unwrap(), b"exported data");
+        let wrong_key = derive_key_from_passphrase("wrong passphrase", &salt);
+        assert!(open(&wrong_key, &blob).is_err());
     }
 
     #[test]

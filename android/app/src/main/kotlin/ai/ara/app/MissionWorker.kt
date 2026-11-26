@@ -112,7 +112,7 @@ class MissionWorker(appContext: Context, params: WorkerParameters) :
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_agenda)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(goal.take(80))
                 .setContentText(text)
                 .setAutoCancel(true)

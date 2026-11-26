@@ -9,6 +9,7 @@
 //! * https only; Kimi (Moonshot), DeepSeek, OpenAI, OpenRouter, Groq, Mistral,
 //!   Together presets, or any compatible endpoint.
 
+pub mod image_gen;
 pub mod shield;
 
 use ara_core_api::{AraError, AraResult, CancellationToken};
@@ -97,7 +98,7 @@ pub fn validate_base_url(url: &str) -> AraResult<String> {
     Ok(u.to_string())
 }
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_recv_response(Some(Duration::from_secs(90)))
@@ -106,7 +107,7 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-fn map_err(e: ureq::Error) -> AraError {
+pub(crate) fn map_err(e: ureq::Error) -> AraError {
     match e {
         ureq::Error::StatusCode(401) | ureq::Error::StatusCode(403) => {
             AraError::InvalidInput("the provider rejected the API key".into())
@@ -122,7 +123,7 @@ fn map_err(e: ureq::Error) -> AraError {
     }
 }
 
-fn short(s: &str) -> String {
+pub(crate) fn short(s: &str) -> String {
     s.chars().take(120).collect()
 }
 

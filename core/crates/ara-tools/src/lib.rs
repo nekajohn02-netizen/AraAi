@@ -49,6 +49,14 @@ pub enum Permission {
     ReadUserFiles,
     /// Save facts to ARA's long-term memory.
     Memory,
+    /// Read or control a smart-home device through the user's connected hub
+    /// (Home Assistant) — see `ara-smarthome` and ADR-020.
+    SmartHome,
+    /// Generate an image through the user's own cloud API Hub provider/key
+    /// (T2.6). Every call still passes `content_policy::check_media_prompt`
+    /// in `precheck` first, regardless of this permission's grant — a
+    /// refused prompt never reaches the network at all.
+    MediaGeneration,
 }
 
 /// What happens to the world when the tool runs.
@@ -362,6 +370,38 @@ mod tests {
         g.set(Permission::ComposeMessages, Grant::Always);
         let d = r.dispatch(&call("telegram_compose", json!({"text": "hi"})), &g, false);
         assert!(matches!(d, Dispatch::NeedsConfirmation { .. }), "{d:?}");
+    }
+
+    #[test]
+    fn smarthome_control_always_confirms_even_when_always_allowed() {
+        let r = ToolRegistry::with_builtins();
+        let mut g = PermissionStore::default();
+        g.set(Permission::SmartHome, Grant::Always);
+        let c = call(
+            "smarthome_control_device",
+            json!({"domain": "lock", "service": "unlock", "entity_id": "lock.front_door"}),
+        );
+        // Even "Always" allowed must still stop for a human "yes" — this is
+        // a real-world physical effect (ADR-020), not a convenience toggle.
+        let d = r.dispatch(&c, &g, false);
+        let Dispatch::NeedsConfirmation { summary, .. } = d else {
+            panic!("{d:?}")
+        };
+        assert!(summary.contains("lock.front_door") && summary.contains("lock.unlock"));
+        assert!(matches!(r.dispatch(&c, &g, true), Dispatch::RunService { .. }));
+
+        // Without the permission at all, it's denied outright.
+        let d = r.dispatch(&c, &PermissionStore::default(), true);
+        assert!(matches!(d, Dispatch::Denied { .. }));
+    }
+
+    #[test]
+    fn smarthome_list_devices_is_read_only_and_needs_no_confirmation() {
+        let r = ToolRegistry::with_builtins();
+        let mut g = PermissionStore::default();
+        g.set(Permission::SmartHome, Grant::Always);
+        let d = r.dispatch(&call("smarthome_list_devices", json!({})), &g, false);
+        assert!(matches!(d, Dispatch::RunService { .. }), "{d:?}");
     }
 
     #[test]

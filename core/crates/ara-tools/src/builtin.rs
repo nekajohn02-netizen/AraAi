@@ -119,6 +119,56 @@ pub fn service_manifests() -> Vec<ToolManifest> {
             SideEffect::Reversible,
             Runtime::Service,
         ),
+        manifest(
+            "smarthome_list_devices",
+            "List the user's smart-home devices and current state, via their connected Home Assistant.",
+            vec![],
+            vec![Permission::SmartHome],
+            SideEffect::None,
+            Runtime::Service,
+        ),
+        manifest(
+            "smarthome_control_device",
+            "Turn a smart-home device on/off or call another simple Home Assistant service on it (e.g. light.turn_on). Always confirmed with the user first — a real-world physical effect.",
+            vec![
+                (
+                    "domain",
+                    ParamSpec::string(40, true, "Home Assistant domain, e.g. light, switch, lock"),
+                ),
+                (
+                    "service",
+                    ParamSpec::string(40, true, "service to call, e.g. turn_on, turn_off, toggle"),
+                ),
+                (
+                    "entity_id",
+                    ParamSpec::string(100, true, "full entity id, e.g. light.kitchen"),
+                ),
+            ],
+            vec![Permission::SmartHome],
+            SideEffect::External,
+            Runtime::Service,
+        ),
+        manifest(
+            "generate_image",
+            "Generate an image from a text description via the user's own connected cloud provider/key. Refused before any network call for music or explicit-content requests.",
+            vec![
+                (
+                    "prompt",
+                    ParamSpec::string(500, true, "what to draw, in plain language"),
+                ),
+                (
+                    "size",
+                    ParamSpec::choice(
+                        &["512x512", "768x768", "1024x1024"],
+                        false,
+                        "image dimensions; defaults to the provider's own default if omitted",
+                    ),
+                ),
+            ],
+            vec![Permission::MediaGeneration],
+            SideEffect::External,
+            Runtime::Service,
+        ),
     ]
 }
 
@@ -364,6 +414,29 @@ pub fn precheck(tool: &str, args: &Value) -> Result<(), String> {
                 return Err("start must be YYYY-MM-DDTHH:MM".into());
             }
         }
+        "smarthome_control_device" => {
+            let safe_token = |x: &str| {
+                !x.is_empty() && x.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            };
+            let domain = s("domain").unwrap_or("");
+            let service = s("service").unwrap_or("");
+            let entity = s("entity_id").unwrap_or("");
+            if !safe_token(domain) || !safe_token(service) {
+                return Err("domain/service must be lowercase letters, digits, underscore only".into());
+            }
+            let Some((e_domain, e_name)) = entity.split_once('.') else {
+                return Err("entity_id must look like domain.name".into());
+            };
+            if !safe_token(e_domain) || e_name.is_empty() || !safe_token(e_name) {
+                return Err("entity_id must look like domain.name".into());
+            }
+        }
+        "generate_image" => {
+            let prompt = s("prompt").unwrap_or("");
+            if let Err(violation) = crate::content_policy::check_media_prompt(prompt) {
+                return Err(violation.message().into());
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -413,6 +486,11 @@ pub fn summarize(m: &ToolManifest, args: &Value) -> String {
         "maps_search" => format!("Maps: {}", short(s("query"))),
         "copy_to_clipboard" => format!("Copy: {}", short(s("text"))),
         "remember" => format!("🧠 {}", short(s("fact"))),
+        "smarthome_control_device" => format!("🏠 {} → {}.{}", s("entity_id"), s("domain"), s("service")),
+        "generate_image" => format!(
+            "🖼 generate (cloud, your provider/key) → {}",
+            short(s("prompt"))
+        ),
         _ => format!("{}: {}", m.id, args),
     }
 }
@@ -853,5 +931,66 @@ mod tests {
         assert!(precheck("set_timer", &json!({"minutes": 10})).is_ok());
         assert!(precheck("set_timer", &json!({})).is_err());
         assert!(precheck("email_compose", &json!({"to": "nope"})).is_err());
+
+        assert!(precheck(
+            "smarthome_control_device",
+            &json!({"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"})
+        )
+        .is_ok());
+        for bad in [
+            json!({"domain": "light; drop", "service": "turn_on", "entity_id": "light.kitchen"}),
+            json!({"domain": "light", "service": "turn on", "entity_id": "light.kitchen"}),
+            json!({"domain": "light", "service": "turn_on", "entity_id": "lightkitchen"}),
+            json!({"domain": "light", "service": "turn_on", "entity_id": "light."}),
+            json!({"domain": "light", "service": "turn_on", "entity_id": ".kitchen"}),
+        ] {
+            assert!(precheck("smarthome_control_device", &bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn generate_image_precheck_blocks_music_and_explicit_prompts_before_any_network_call() {
+        assert!(precheck("generate_image", &json!({"prompt": "a watercolor fox in a forest"}))
+            .is_ok());
+        assert!(precheck("generate_image", &json!({"prompt": "اعمل لي أغنية حزينة"})).is_err());
+        assert!(precheck("generate_image", &json!({"prompt": "generate a nude image"})).is_err());
+    }
+
+    #[test]
+    fn generate_image_is_denied_end_to_end_for_a_blocked_prompt_even_with_full_permission() {
+        use crate::policy::{Grant, PermissionStore};
+        use crate::{Dispatch, Permission, ToolCall, ToolRegistry};
+        let reg = ToolRegistry::with_builtins();
+        let mut grants = PermissionStore::default();
+        grants.set(Permission::MediaGeneration, Grant::Always);
+
+        let blocked = reg.dispatch(
+            &ToolCall {
+                tool: "generate_image".into(),
+                arguments: json!({"prompt": "compose an upbeat instrumental"}),
+            },
+            &grants,
+            false,
+        );
+        assert!(
+            matches!(blocked, Dispatch::Denied { .. }),
+            "music request must be denied before any permission/confirmation step: {blocked:?}"
+        );
+
+        // A benign prompt with the same "Always" grant still needs explicit
+        // confirmation (SideEffect::External, ADR-006 — no exception for a
+        // permission grant), it is not silently run.
+        let benign = reg.dispatch(
+            &ToolCall {
+                tool: "generate_image".into(),
+                arguments: json!({"prompt": "a lighthouse at sunset"}),
+            },
+            &grants,
+            false,
+        );
+        assert!(
+            matches!(benign, Dispatch::NeedsConfirmation { .. }),
+            "benign prompt must still require confirmation: {benign:?}"
+        );
     }
 }

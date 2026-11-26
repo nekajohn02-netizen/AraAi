@@ -1,0 +1,13 @@
+[package]
+name = "ara-backup"
+description = "Encrypted local export/import of Ara's own data directory (conversations, documents, settings) — a user-held passphrase, no server, no cloud upload."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+ara-crypto = { path = "../ara-crypto" }
+
+[dev-dependencies]
+tempfile = "3"

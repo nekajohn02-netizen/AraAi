@@ -1,6 +1,11 @@
 package ai.ara.app
 
 import android.text.format.Formatter
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -9,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -47,13 +53,15 @@ fun ModelsScreen(bridge: CoreBridge) {
     var mode by remember { mutableStateOf("automatic") }
     var persona by remember { mutableStateOf("general") }
     var personas by remember { mutableStateOf(emptyList<JSONObject>()) }
-    val arabic = Locale.getDefault().language == "ar"
+    val arabic = isArabicLocale()
     var data by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     val downloads = remember { mutableStateMapOf<String, Dl>() }
-    val lang = Locale.getDefault().language
+    val lang = currentLanguageTag()
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var benchmarkCancel by remember { mutableStateOf<CancelHandle?>(null) }
 
     LaunchedEffect(Unit) { personas = bridge.personas() }
     LaunchedEffect(mode, persona, refresh) {
@@ -66,7 +74,7 @@ fun ModelsScreen(bridge: CoreBridge) {
     fun act(id: String, block: suspend () -> Unit) = scope.launch {
         busy = id
         error = null
-        try { block() } catch (e: Exception) { error = e.message ?: e.toString() }
+        try { block() } catch (e: Exception) { error = e.rethrowIfCancellation().message ?: e.toString() }
         busy = null
         refresh++
     }
@@ -113,7 +121,13 @@ fun ModelsScreen(bridge: CoreBridge) {
                 }
             }
         }
-        error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        item {
+            AnimatedVisibility(
+                error != null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis())),
+            ) {
+                Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.liveRegionAnnounce())
+            }
+        }
         if (data == null && error == null) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
 
         val rows = data?.getJSONArray("models")?.objects().orEmpty()
@@ -124,11 +138,14 @@ fun ModelsScreen(bridge: CoreBridge) {
             val partial = m.getJSONObject("install").optLong("bytes", 0)
             val dl = downloads[id]
             Card(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().animateItem(),
                 colors = if (m.optBoolean("recommended")) CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer) else CardDefaults.cardColors(),
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(
+                    Modifier.padding(14.dp).animateContentSize(tween(motionMillis())),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     Text(m.getString("display_name") + "  ·  " + m.getString("quantization"),
                         style = MaterialTheme.typography.titleMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -159,11 +176,21 @@ fun ModelsScreen(bridge: CoreBridge) {
                                 if (!m.optBoolean("loaded")) Button(enabled = busy == null, onClick = {
                                     act(id) { bridge.io { loadModel(id) } }
                                 }) { Text(stringResource(R.string.use_model)) }
-                                else OutlinedButton(enabled = busy == null, onClick = {
-                                    act(id) { bridge.io { benchmarkLoaded() } }
+                                else if (busy == id && benchmarkCancel != null) {
+                                    OutlinedButton({ benchmarkCancel?.cancel() }) { Text(stringResource(R.string.cancel)) }
+                                } else OutlinedButton(enabled = busy == null, onClick = {
+                                    val handle = CancelHandle()
+                                    benchmarkCancel = handle
+                                    act(id) {
+                                        try {
+                                            bridge.io { benchmarkLoaded(handle) }
+                                        } finally {
+                                            benchmarkCancel = null
+                                        }
+                                    }
                                 }) { Text(stringResource(R.string.benchmark)) }
                                 TextButton(enabled = busy == null && !m.optBoolean("loaded"), onClick = {
-                                    act(id) { bridge.io { deleteModel(id) } }
+                                    confirmDelete = id
                                 }) { Text(stringResource(R.string.delete)) }
                             }
                             cand != null -> Button(onClick = {
@@ -173,7 +200,7 @@ fun ModelsScreen(bridge: CoreBridge) {
                                     try {
                                         bridge.download(id, cancel) { d, t -> downloads[id] = Dl(d, t, cancel) }
                                     } catch (e: FfiException.Cancelled) {
-                                    } catch (e: Exception) { error = e.message }
+                                    } catch (e: Exception) { error = e.rethrowIfCancellation().message }
                                     downloads.remove(id)
                                     refresh++
                                 }
@@ -189,6 +216,21 @@ fun ModelsScreen(bridge: CoreBridge) {
         item { ApiHubSection(bridge, onChanged = { refresh++ }) }
         item { Text(stringResource(R.string.models_note), style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 24.dp)) }
+    }
+
+    confirmDelete?.let { id ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text(stringResource(R.string.delete_model_title)) },
+            text = { Text(stringResource(R.string.delete_model_body)) },
+            confirmButton = {
+                Button({
+                    confirmDelete = null
+                    act(id) { bridge.io { deleteModel(id) } }
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton({ confirmDelete = null }) { Text(stringResource(R.string.decline)) } },
+        )
     }
 }
 

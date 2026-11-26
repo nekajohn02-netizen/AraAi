@@ -59,6 +59,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
 
 [[package]]
+name = "ara-backup"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
+ "ara-crypto",
+ "tempfile",
+]
+
+[[package]]
 name = "ara-cli"
 version = "0.1.0"
 dependencies = [
@@ -125,6 +134,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ara-events"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ara-ffi"
 version = "0.1.0"
 dependencies = [
@@ -133,13 +152,17 @@ dependencies = [
  "ara-core-api",
  "ara-crypto",
  "ara-device-profiler",
+ "ara-events",
  "ara-inference",
+ "ara-lan-discovery",
  "ara-missions",
  "ara-model-manager",
  "ara-model-registry",
  "ara-model-selector",
+ "ara-scheduler",
  "ara-search",
  "ara-sentinel",
+ "ara-smarthome",
  "ara-tools",
  "serde",
  "serde_json",
@@ -155,6 +178,15 @@ dependencies = [
  "ara-core-api",
  "llama-cpp-2",
  "self_cell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ara-lan-discovery"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
  "serde",
  "serde_json",
 ]
@@ -202,6 +234,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ara-scheduler"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ara-search"
 version = "0.1.0"
 dependencies = [
@@ -223,6 +265,16 @@ dependencies = [
  "serde",
  "sha2 0.11.1",
  "tempfile",
+]
+
+[[package]]
+name = "ara-smarthome"
+version = "0.1.0"
+dependencies = [
+ "ara-core-api",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

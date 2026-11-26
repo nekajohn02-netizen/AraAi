@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ARA</string>
+    <string name="app_name" translatable="false">Ara</string>
     <string name="tab_chat">Chat</string>
     <string name="tab_models">Models</string>
     <string name="tab_missions">Missions</string>
@@ -33,6 +33,8 @@
     <string name="benchmark">Measure speed</string>
     <string name="delete">Delete</string>
     <string name="models_note">Models come from their official publishers with verified SHA-256 checksums and open licenses. Estimates improve after you tap “Measure speed”. Downloads are the only network use of ARA.</string>
+    <string name="delete_model_title">Delete this model?</string>
+    <string name="delete_model_body">The downloaded file is removed from this device. You can download it again later.</string>
 
     <string name="running_locally">Running locally · %1$s</string>
     <string name="no_model_loaded">No model loaded</string>
@@ -48,11 +50,42 @@
     <string name="stop">Stop</string>
     <string name="close">Close</string>
     <string name="no_conversations">No conversations yet.</string>
+    <string name="search_conversations">Search conversations…</string>
+    <string name="delete_conversation_title">Delete this conversation?</string>
+    <string name="delete_conversation_body">This can\'t be undone.</string>
 
     <string name="skills_title">Skills &amp; permissions</string>
     <string name="skills_note">Skills let ARA act on your phone. Each needs your permission; you can change it any time.</string>
     <string name="no_permission_needed">No permission needed (runs inside ARA).</string>
     <string name="external_always_confirm">Anything that reaches other people (messages, posts, calls) always asks you first, and you press send yourself in the target app.</string>
+    <string name="import_skill">Import a skill file…</string>
+    <string name="skill_imported_tag">Imported</string>
+    <string name="import_skill_warning_title">Not reviewed by Ara</string>
+    <string name="import_skill_warning_body">This skill was not reviewed or signed by Ara. Only import it if you trust where it came from.</string>
+    <string name="import_skill_tools_requested">It can use: %1$s</string>
+    <string name="import_skill_confirm">I understand, activate it</string>
+    <string name="delete_skill_title">Remove this imported skill?</string>
+    <string name="delete_skill_body">It stops being offered immediately — not at next restart.</string>
+    <string name="strict_offline_title">Strict Offline Mode</string>
+    <string name="strict_offline_note">Blocks every cloud model call before it opens a connection. Model downloads you start yourself still work — this only affects background-style cloud calls.</string>
+    <string name="perm_smart_home">Smart home devices</string>
+    <string name="smarthome_title">Smart home</string>
+    <string name="smarthome_note">Connect your own Home Assistant to check and control its devices. Ara talks only to your hub, never to a device directly.</string>
+    <string name="smarthome_url">Home Assistant URL</string>
+    <string name="smarthome_token">Long-lived access token</string>
+    <string name="smarthome_connect">Connect</string>
+    <string name="smarthome_connected_count">Connected — %1$d devices found</string>
+    <string name="smarthome_connected_to">Connected to %1$s</string>
+    <string name="smarthome_disconnect">Disconnect</string>
+    <string name="process_text_label">Ask Ara</string>
+    <string name="voice_input_label">Voice input</string>
+    <string name="voice_listening">Listening…</string>
+    <string name="voice_not_available">No speech recognition service found on this device.</string>
+    <string name="voice_no_permission">Microphone permission is needed for voice input.</string>
+    <string name="voice_no_speech">Didn\'t catch that — try again.</string>
+    <string name="speak_replies_title">Read replies aloud</string>
+    <string name="speak_replies_note">Uses the phone\'s own on-device text-to-speech — no internet, no external service.</string>
+    <string name="process_text_prefill_note">Pasted from another app. Review before sending.</string>
     <string name="grant_denied">Off</string>
     <string name="grant_ask">Ask</string>
     <string name="grant_always">Allow</string>
@@ -74,9 +107,15 @@
     <string name="context_note">Smaller uses less RAM; larger remembers more of the conversation. Applies on next model load.</string>
     <string name="privacy_title">Privacy</string>
     <string name="privacy_body">Conversations, models and settings stay on this phone and are excluded from cloud backup. ARA only uses the internet to download models you choose.</string>
+    <string name="reduce_motion_title">Reduce motion</string>
+    <string name="reduce_motion_note">Turns off Ara\'s transition and fade animations. The system\'s own \"Remove animations\" developer setting also turns them off automatically.</string>
     <string name="tab_files">My files</string>
     <string name="files_title">My files &amp; memory</string>
     <string name="files_note">Import text files (TXT, Markdown, CSV, JSON, HTML) or PDFs so ARA can answer from them with sources (page number for PDFs). Files stay on this phone.</string>
+    <string name="delete_document_title">Delete this file?</string>
+    <string name="delete_document_body">\"%1$s\" is removed from Ara\'s search index and storage. This can\'t be undone.</string>
+    <string name="delete_memory_title">Delete this memory?</string>
+    <string name="delete_memory_body">\"%1$s\" will no longer be remembered.</string>
     <string name="import_files">Import files</string>
     <string name="search_files">Search your files…</string>
     <string name="no_results">No matches in your files.</string>
@@ -95,6 +134,8 @@
     <string name="shield_off">Privacy shield off</string>
     <string name="allow_sending">Allow…</string>
     <string name="add_provider">Add a provider</string>
+    <string name="delete_provider_title">Remove this provider?</string>
+    <string name="delete_provider_body">\"%1$s\" and its saved key are removed from this device.</string>
     <string name="api_key">API key</string>
     <string name="test_connection">Test connection</string>
     <string name="connection_ok">Connected — %1$d models available</string>
@@ -113,6 +154,7 @@
     <string name="no_missions">No missions yet.</string>
     <string name="mission_status_line">%1$s · step %2$d of %3$d</string>
     <string name="mission_result">Result: %1$s</string>
+    <string name="mission_plan_title">Plan</string>
     <string name="pause">Pause</string>
     <string name="resume_mission">Resume</string>
     <string name="mission_log">Log</string>
@@ -122,6 +164,20 @@
     <string name="mission_max_steps">Max steps</string>
     <string name="mission_max_time">Max time</string>
     <string name="start_mission">Start</string>
+    <string name="mission_schedule_later">Schedule for later</string>
+    <string name="mission_schedule_delay">Start in</string>
+    <string name="mission_schedule_repeat_daily">Repeat daily</string>
+    <string name="mission_schedule_next">Next: %1$s</string>
+    <string name="mission_schedule_repeating">(repeating)</string>
+    <string name="scheduled_tasks_title">Scheduled</string>
+    <string name="event_rules_title">Event Watcher</string>
+    <string name="event_rules_note">Automatically run a mission when something happens on this device.</string>
+    <string name="new_event_rule">New rule</string>
+    <string name="event_kind_battery_low">Battery low</string>
+    <string name="event_kind_power_connected">Charging started</string>
+    <string name="event_kind_power_disconnected">Charging stopped</string>
+    <string name="event_kind_network_available">Back online</string>
+    <string name="event_kind_network_lost">Connection lost</string>
     <string name="mission_channel">Mission updates</string>
     <string name="mission_needs_approval">Needs your approval</string>
     <string name="mission_done">Finished</string>
@@ -139,5 +195,15 @@
     <string name="security_score">Score: %1$d / 100</string>
     <string name="security_checks_run">Checks run: %1$s</string>
     <string name="security_no_findings">No findings.</string>
+    <string name="privacy_log_title">Privacy log</string>
+    <string name="privacy_log_note">What Ara actually did: which tool ran and whether it was allowed — never the message content or the call\'s own data.</string>
+    <string name="privacy_log_open">Open log</string>
+    <string name="privacy_log_empty">Nothing logged yet.</string>
+    <string name="privacy_log_via_skills">via: %1$s</string>
+    <string name="privacy_log_outcome_done">done</string>
+    <string name="privacy_log_outcome_needs_confirmation">asked for confirmation</string>
+    <string name="privacy_log_outcome_run_on_host">opened an app</string>
+    <string name="privacy_log_outcome_run_service">ran in Ara</string>
+    <string name="privacy_log_outcome_denied">denied</string>
     <string name="security_evidence">Evidence: %1$s</string>
 </resources>

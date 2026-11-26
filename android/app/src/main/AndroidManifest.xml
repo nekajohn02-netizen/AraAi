@@ -8,6 +8,17 @@
          app isn't in the foreground (Android 13+ requires runtime consent;
          requested from MainActivity, never assumed). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Event Watcher: lets Ara notice when Wi-Fi/data comes back or is
+         lost, to run a rule the user configured (e.g. "sync when back
+         online"). A normal permission, no runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice input (mic button in Chat): Android's own on-device
+         SpeechRecognizer, requested lazily when the user taps the mic, not
+         at launch — same "permission in context" rule as every other
+         hardware permission in this app. No third-party or cloud speech
+         service is used (product decision: no external service cost
+         anywhere in Ara). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Package visibility for the open_app / share tools (Android 11+). -->
     <queries>
@@ -29,19 +40,36 @@
         <intent><action android:name="android.intent.action.WEB_SEARCH" /></intent>
     </queries>
     <application
+        android:name=".AraApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.Ara">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Ara.Starting"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Lets the user select text in any other app and send it to
+                 Ara from the system text-selection toolbar (a documented
+                 gap vs. a competitor, see docs/COMPETITIVE_ANALYSIS.md).
+                 Always opens full Ara with the text prefilled in Chat for
+                 the user to review/edit before sending — Ara has no fast
+                 synchronous text-transform to return instead, and never
+                 claims to. -->
+            <intent-filter android:label="@string/process_text_label">
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
     </application>
