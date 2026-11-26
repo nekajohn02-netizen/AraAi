@@ -126,12 +126,27 @@ unfalsifiable scope this registry exists to prevent.
   exact test names, not just this summary.
 - **PARTIALLY_IMPLEMENTED** is the largest bucket by far. That's accurate
   for an early-stage app with a disproportionately mature Rust core relative
-  to its Kotlin UI surface (see `IMPLEMENTATION_STATUS.md`'s fourth pass).
+  to its Kotlin UI surface (see `docs/IMPLEMENTATION_STATUS.md`'s fourth pass).
 - **NOT_APPLICABLE** (≈30 of 93 domains) is a judgment call about product
   fit, not a technical impossibility claim — if the project owner actually
   wants Ara to do CAD or bioinformatics, that's a product-direction
   conversation, not something this registry should quietly assume away or
   quietly assume into scope.
+
+## A note on `docs/PROPOSED_BUSINESS_ASSISTANT_ROADMAP.md`
+
+That file (moved from a root-level `Todo.md`, 2026-11-26, to keep the
+repo root to just `README.md`/`PROJECT_OVERVIEW.md`) is an **unreviewed
+draft proposal**, by its own header, for a much larger product
+(multi-tenant workspaces, OAuth social/Gmail automation, SEO crawling,
+a durable agent runtime) that **was not checked against this registry
+or the project owner's existing decisions** before being written. Several
+of its epics directly conflict with rows already decided in this table
+(e.g. BC/BF/BM above — Intent-only messaging by design, no OAuth
+auto-send, single-user not multi-tenant). Treat it as raw material for a
+future product-direction conversation with the project owner, never as
+confirmed scope, until each item has gone through the same P0-01 inventory
+step the file itself asks for in its own first section.
 
 ## Where the rest of that prompt's requested documents already live
 
@@ -147,7 +162,7 @@ Rather than create 16 more files with largely overlapping content:
 | Autonomous-business/marketing/investor-relations/social-media/market-monitoring/coding/cybersecurity capability gap analysis + skills-folder plan | `docs/AGENTIC_BUSINESS_AND_IOT_BLUEPRINT.md` (2026-11-26) — also the explicit scoping-down of "control any internet-connected device" to the user's own paired devices only. |
 | `NEW_MODULE_REGISTRY.md` | `docs/ARCHITECTURE.md`'s crate list. |
 | `EXPANSION_RISK_REGISTER.md`, `EXPANSION_DECISIONS.md` | The ADR sequence in `docs/ARCHITECTURE.md` already records decisions + the risk reasoning for each. |
-| `EXPANSION_TEST_REPORT.md` | `IMPLEMENTATION_STATUS.md` (this session's actual `cargo test`/`gradlew` runs, with real pass counts — the separate `PERFORMANCE_REPORT.md`/`ROOT_CAUSE_REPORT.md`/`SECURITY_REPORT.md` files that used to duplicate parts of this were removed 2026-11-26, their content already being inside `IMPLEMENTATION_STATUS.md`). |
+| `EXPANSION_TEST_REPORT.md` | `docs/IMPLEMENTATION_STATUS.md` (this session's actual `cargo test`/`gradlew` runs, with real pass counts — the separate `PERFORMANCE_REPORT.md`/`ROOT_CAUSE_REPORT.md`/`SECURITY_REPORT.md` files that used to duplicate parts of this were removed 2026-11-26, their content already being inside `docs/IMPLEMENTATION_STATUS.md`). |
 | `INTEGRATION_OPPORTUNITIES.md` | `docs/EXPANSION_BLUEPRINT.md`. |
 | `BEYOND_LIMITS_AUDIT.md` / `BEYOND_LIMITS_FINAL_REPORT.md` | Not created — "beyond limits" framing conflicts with this project's own anti-inflation principle; the honest version of that content is this registry plus `EXPANSION_BLUEPRINT.md`'s explicit ❌ verdicts. |
 

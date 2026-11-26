@@ -3,7 +3,7 @@
 آخر تحديث: 2026-11-26
 
 > **هذا مستند إضافي لا بديل.** الحالة الحقيقية للتنفيذ تبقى في
-> `docs/ROADMAP_TASKS.md` و`IMPLEMENTATION_STATUS.md` و
+> `docs/ROADMAP_TASKS.md` و`docs/IMPLEMENTATION_STATUS.md` و
 > `docs/MASTER_CAPABILITY_REGISTRY.md`. هذا المستند يجاوب على طلب صريح من
 > صاحب المشروع: تقييم قدرة آرا (مقارنة بمنافسين وأدوات حقيقية) على تشغيل
 > شركة، التسويق، التواصل مع مستثمرين، إدارة سوشيال ميديا، متابعة السوق
@@ -59,7 +59,7 @@
 بحث مباشر (Web Search، 2026-11-26) عن الوضع الحالي لكل مجال مطلوب +
 قراءة مباشرة لمستودعات/وثائق آرا نفسها (`MASTER_PLAN.md`,
 `COMPETITIVE_ANALYSIS.md`, `MASTER_CAPABILITY_REGISTRY.md`,
-`EXPANSION_BLUEPRINT.md`, `IMPLEMENTATION_STATUS.md`) بدل الافتراض. كل
+`EXPANSION_BLUEPRINT.md`, `docs/IMPLEMENTATION_STATUS.md`) بدل الافتراض. كل
 رقم/أداة مذكورة من البحث هنا **🟡 معلومة من الويب، غير مُدقَّقة بمستوى
 T0.4 في `COMPETITIVE_ANALYSIS.md`** (مافيش فحص كود مصدري مباشر لمنتجات
 خارجية هنا كما حصل مع المنافسين المباشرين) — فُرّقت بوضوح عن أي حالة

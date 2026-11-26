@@ -18,10 +18,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -74,23 +77,41 @@ class MainActivity : ComponentActivity() {
         setContent {
             AraTheme {
                 var bridge by remember { mutableStateOf<CoreBridge?>(null) }
-                LaunchedEffect(Unit) {
-                    bridge = CoreBridge.getAsync(this@MainActivity)
-                    coreReady = true
+                var startupError by remember { mutableStateOf<String?>(null) }
+                var retry by remember { mutableIntStateOf(0) }
+                LaunchedEffect(retry) {
+                    // Catching `Throwable`, not `Exception`: a native-library
+                    // load failure (e.g. no matching ABI for this device,
+                    // the real cause found 2026-11-26 on a 32-bit-only
+                    // tablet) surfaces as `UnsatisfiedLinkError`/
+                    // `ExceptionInInitializerError`, both `Error` subtypes a
+                    // bare `catch (e: Exception)` would miss entirely —
+                    // leaving this coroutine's exception uncaught, which
+                    // crashes the whole app with no on-screen explanation.
+                    try {
+                        bridge = CoreBridge.getAsync(this@MainActivity)
+                    } catch (t: Throwable) {
+                        startupError = "${t::class.java.simpleName}: ${t.message ?: "unknown startup error"}"
+                    } finally {
+                        coreReady = true
+                    }
                 }
                 val b = bridge
-                if (b == null) {
-                    // Same brand background as the native splash so there is
-                    // no visible seam while the store finishes opening.
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Image(
-                            painterResource(R.mipmap.ic_launcher_foreground),
-                            contentDescription = null,
-                            modifier = Modifier.size(96.dp),
-                        )
+                val err = startupError
+                when {
+                    err != null -> StartupErrorScreen(err) { startupError = null; coreReady = false; retry++ }
+                    b == null -> {
+                        // Same brand background as the native splash so there is
+                        // no visible seam while the store finishes opening.
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Image(
+                                painterResource(R.mipmap.ic_launcher_foreground),
+                                contentDescription = null,
+                                modifier = Modifier.size(96.dp),
+                            )
+                        }
                     }
-                } else {
-                    AraApp(b, prefillText)
+                    else -> AraApp(b, prefillText)
                 }
             }
         }
@@ -106,6 +127,20 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         processTextFrom(intent)?.let { prefillText = it }
+    }
+
+    @Composable
+    private fun StartupErrorScreen(error: String, onRetry: () -> Unit) {
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(stringResource(R.string.startup_error_title), style = MaterialTheme.typography.titleMedium)
+                Text(error, style = MaterialTheme.typography.bodySmall)
+                Button(onRetry) { Text(stringResource(R.string.startup_error_retry)) }
+            }
+        }
     }
 
     private fun processTextFrom(intent: Intent?): String? = intent

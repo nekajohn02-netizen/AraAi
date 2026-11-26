@@ -208,4 +208,6 @@
     <string name="privacy_log_outcome_run_service">اتنفذ جوه آرا</string>
     <string name="privacy_log_outcome_denied">اترفض</string>
     <string name="security_evidence">الدليل: %1$s</string>
+    <string name="startup_error_title">آرا معرفتش تبدأ</string>
+    <string name="startup_error_retry">جرّب تاني</string>
 </resources>

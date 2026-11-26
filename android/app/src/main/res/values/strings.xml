@@ -206,4 +206,6 @@
     <string name="privacy_log_outcome_run_service">ran in Ara</string>
     <string name="privacy_log_outcome_denied">denied</string>
     <string name="security_evidence">Evidence: %1$s</string>
+    <string name="startup_error_title">Ara couldn\'t start</string>
+    <string name="startup_error_retry">Try again</string>
 </resources>

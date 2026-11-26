@@ -24,5 +24,5 @@ changes.
 See `generate_icons.py` for the exact crop box and composition logic (why
 the emblem is cropped out of the full lockup for the launcher icon, the
 adaptive-icon safe-zone scaling, and the white-silhouette notification-icon
-derivation) — also documented in `IMPLEMENTATION_STATUS.md` at the repo
+derivation) — also documented in `docs/IMPLEMENTATION_STATUS.md` at the repo
 root.

@@ -124,6 +124,6 @@ Google AI Edge Gallery...)، ولا واحد فيهم عنده دعم عربي �
 | جدول شامل لكل مجال قدرة (93 مجال) | `docs/MASTER_CAPABILITY_REGISTRY.md` |
 | مقارنة بمنافسين حقيقيين (بفحص كود) | `docs/COMPETITIVE_ANALYSIS.md` |
 | قياسات أداء فعلية بالأرقام | `docs/COMPETITIVE_BENCHMARKS.md` |
-| تفاصيل كل جلسة عمل (سجل تفصيلي) | `IMPLEMENTATION_STATUS.md` |
+| تفاصيل كل جلسة عمل (سجل تفصيلي) | `docs/IMPLEMENTATION_STATUS.md` |
 | قواعد الأمان والخصوصية | `docs/SECURITY_AND_PRIVACY.md` |
 | تشغيل الاختبارات بنفسك | `docs/TESTING.md` |

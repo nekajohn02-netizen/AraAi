@@ -1,6 +1,7 @@
 package ai.ara.app
 
 import android.app.Application
+import android.util.Log
 
 /**
  * Registers the Event Watcher's OS listeners for the whole process
@@ -18,6 +19,13 @@ import android.app.Application
 class AraApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        EventWatcher.register(this)
+        // Registering OS listeners (connectivity callback, a broadcast
+        // receiver) can throw on some OEM/Android-version combinations —
+        // a real possibility flagged 2026-11-25/26 while chasing an
+        // unrelated crash-on-launch report. Event Watcher is an optional
+        // convenience; it must never be able to take the whole app down
+        // before MainActivity even gets a chance to run.
+        runCatching { EventWatcher.register(this) }
+            .onFailure { Log.e("Ara", "EventWatcher registration failed", it) }
     }
 }
