@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,13 +39,24 @@ object EventWatcher {
                 fire(ctx, kind)
             }
         }
-        context.registerReceiver(
+        // On Android 13+ (targetSdk here is 36), the plain 2-arg
+        // `registerReceiver` throws `SecurityException` at the call site
+        // unless RECEIVER_EXPORTED/RECEIVER_NOT_EXPORTED is given — a real
+        // crash this app would hit on launch on any current-generation
+        // phone, found while auditing this file for other startup crashes
+        // 2026-11-26. `ContextCompat.registerReceiver` is the
+        // version-safe way to pass that flag (plain `Context.
+        // registerReceiver(receiver, filter, flags)` needs API 33+ itself).
+        // NOT_EXPORTED: only this app's own process needs these broadcasts.
+        ContextCompat.registerReceiver(
+            context,
             receiver,
             IntentFilter().apply {
                 addAction(Intent.ACTION_BATTERY_LOW)
                 addAction(Intent.ACTION_POWER_CONNECTED)
                 addAction(Intent.ACTION_POWER_DISCONNECTED)
             },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
         )
 
         context.getSystemService(ConnectivityManager::class.java)?.registerDefaultNetworkCallback(

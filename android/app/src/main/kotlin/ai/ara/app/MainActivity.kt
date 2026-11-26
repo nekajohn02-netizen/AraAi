@@ -203,7 +203,7 @@ private fun AraApp(bridge: CoreBridge, prefillText: String? = null) {
         runCatching { bridge.io { resumableMissions() } }.getOrNull()?.forEach { id ->
             MissionWorker.enqueueNext(ctx, id)
         }
-        SchedulerWorker.ensureScheduled(ctx)
+        runCatching { SchedulerWorker.ensureScheduled(ctx) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
