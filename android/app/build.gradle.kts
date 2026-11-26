@@ -31,7 +31,11 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // armeabi-v7a: older/budget 32-bit-only devices (e.g. Samsung
+        // Galaxy Tab A6, 2016) have no 64-bit ABI at all — without this,
+        // the app installs but crashes immediately on launch because the
+        // native core library can't be loaded (confirmed 2026-11-26).
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     buildTypes {
