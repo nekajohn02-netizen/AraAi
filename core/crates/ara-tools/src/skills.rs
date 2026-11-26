@@ -130,7 +130,7 @@ pub fn verify_signature(s: &SkillManifest, ara_public_key: &[u8]) -> bool {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     (0..s.len())
@@ -217,6 +217,14 @@ For job search: help write/improve a CV or cover letter, suggest search terms an
 For market/competitor research: suggest specific, well-scoped search queries and what to look for; never invent market figures, competitor names, or statistics you were not given or did not find in the user's own files. \
 For building a business: structure the conversation (idea, target customer, costs, pricing, first steps) and use calculator for any numbers.",
             &["web_search", "search_documents", "calculator"],
+        ),
+        skill(
+            "smart_home",
+            "Smart home",
+            "البيت الذكي",
+            "Check and control smart-home devices connected through the user's own Home Assistant.",
+            "Use smarthome_list_devices to see what's connected and its current state before acting — never guess an entity id. Use smarthome_control_device to act on exactly one device per call (e.g. domain=light, service=turn_on, entity_id=light.kitchen); every call is confirmed by the user before it runs, so don't ask for confirmation yourself in text, just call the tool. Never invent a device that wasn't in the list.",
+            &["smarthome_list_devices", "smarthome_control_device"],
         ),
     ]
 }
@@ -411,6 +419,32 @@ const TRIGGERS: &[(&str, &[&str])] = &[
             "startup",
             "start a business",
             "start a company",
+        ],
+    ),
+    (
+        "smart_home",
+        &[
+            "البيت الذكي",
+            "هوم أسيستانت",
+            "=نور",
+            "=لمبة",
+            "اللمبة",
+            "إضاءة",
+            "اضاءة",
+            "=مكيف",
+            "التكييف",
+            "=قفل",
+            "اقفل الباب",
+            "افتح الباب",
+            "الأجهزة الذكية",
+            "اجهزة ذكية",
+            "smart home",
+            "home assistant",
+            "=light",
+            "=lights",
+            "=lock",
+            "=unlock",
+            "thermostat",
         ],
     ),
 ];
@@ -613,6 +647,10 @@ mod tests {
         // "شغل" alone stays phone_control-only (turn on/off), not research
         // (job) — a real Egyptian-Arabic homonym, not a routing bug.
         assert_eq!(r("شغل الكشاف"), ["phone_control"]);
+        assert_eq!(r("عايز اتحكم في إضاءة المطبخ"), ["smart_home"]);
+        assert_eq!(r("اقفل الباب الأمامي"), ["smart_home"]);
+        assert_eq!(r("turn on the kitchen light"), ["smart_home"]);
+        assert_eq!(r("إيه حالة الأجهزة الذكية في البيت؟"), ["smart_home"]);
     }
 
     #[test]

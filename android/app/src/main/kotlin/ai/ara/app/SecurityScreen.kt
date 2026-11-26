@@ -5,6 +5,11 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,13 +17,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 @Composable
@@ -38,6 +47,7 @@ fun SecurityScreen(bridge: CoreBridge) {
     var report by remember { mutableStateOf<JSONObject?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showLog by remember { mutableStateOf(false) }
 
     fun scan() {
         busy = true
@@ -47,7 +57,7 @@ fun SecurityScreen(bridge: CoreBridge) {
                 val facts = collectHostSecurityFacts(ctx).toString()
                 report = bridge.io { JSONObject(securityCheck(facts)) }
             } catch (e: Exception) {
-                error = e.message
+                error = e.rethrowIfCancellation().message
             } finally {
                 busy = false
             }
@@ -67,11 +77,20 @@ fun SecurityScreen(bridge: CoreBridge) {
                 if (busy) CircularProgressIndicator(Modifier.padding(start = 4.dp))
             }
         }
-        error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        item {
+            AnimatedVisibility(
+                error != null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis())),
+            ) {
+                Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.liveRegionAnnounce())
+            }
+        }
         report?.let { r ->
             item {
                 Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(
+                        Modifier.padding(14.dp).animateContentSize(tween(motionMillis())),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         Text(stringResource(R.string.security_score, r.getInt("score")), style = MaterialTheme.typography.titleMedium)
                         Text(
                             stringResource(R.string.security_checks_run, r.getJSONArray("checks_run").strings().joinToString(", ")),
@@ -85,10 +104,10 @@ fun SecurityScreen(bridge: CoreBridge) {
                 item { Text(stringResource(R.string.security_no_findings)) }
             }
             items(findings) { f ->
-                val arabic = java.util.Locale.getDefault().language == "ar"
+                val arabic = isArabicLocale()
                 val severity = f.getString("severity")
                 Card(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().animateItem(),
                     colors = CardDefaults.cardColors(containerColor = severityColor(severity)),
                 ) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -103,9 +122,71 @@ fun SecurityScreen(bridge: CoreBridge) {
                 }
             }
         }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.privacy_log_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.privacy_log_note), style = MaterialTheme.typography.bodySmall)
+                    Button({ showLog = true }) { Text(stringResource(R.string.privacy_log_open)) }
+                }
+            }
+        }
         item { Text("", Modifier.padding(bottom = 24.dp)) }
     }
+
+    if (showLog) ActivityLogDialog(bridge, onDismiss = { showLog = false })
 }
+
+@Composable
+private fun ActivityLogDialog(bridge: CoreBridge, onDismiss: () -> Unit) {
+    var entries by remember { mutableStateOf(emptyList<JSONObject>()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        try {
+            entries = bridge.io { JSONArray(activityLog(200u)) }.objects()
+        } catch (e: Exception) {
+            error = e.rethrowIfCancellation().message
+        }
+    }
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val fmt = remember(configuration) { java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onDismiss) { Text(stringResource(R.string.close)) } },
+        title = { Text(stringResource(R.string.privacy_log_title)) },
+        text = {
+            Column {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (entries.isEmpty() && error == null) Text(stringResource(R.string.privacy_log_empty))
+                LazyColumn {
+                    items(entries) { e ->
+                        val skills = e.optJSONArray("skill_ids")?.strings().orEmpty()
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            Text(
+                                "${fmt.format(java.util.Date(e.getLong("ts_ms")))} · ${e.getString("tool")} → ${outcomeLabel(e.getString("outcome"))}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (skills.isNotEmpty()) Text(
+                                stringResource(R.string.privacy_log_via_skills, skills.joinToString(", ")),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun outcomeLabel(o: String): String = stringResource(when (o) {
+    "done" -> R.string.privacy_log_outcome_done
+    "needs_confirmation" -> R.string.privacy_log_outcome_needs_confirmation
+    "run_on_host" -> R.string.privacy_log_outcome_run_on_host
+    "run_service" -> R.string.privacy_log_outcome_run_service
+    "denied" -> R.string.privacy_log_outcome_denied
+    else -> R.string.privacy_log_outcome_done
+})
 
 @Composable
 private fun severityColor(s: String) = when (s) {

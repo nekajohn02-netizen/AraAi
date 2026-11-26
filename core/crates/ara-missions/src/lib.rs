@@ -22,6 +22,12 @@ pub const MAX_DURATION_MS: u64 = 24 * 3600 * 1000;
 pub const MAX_STEPS_LIMIT: u32 = 2000;
 pub const APPROVAL_TTL_MS: u64 = 12 * 3600 * 1000;
 pub const MAX_PENDING: usize = 20;
+/// A transient failure (a flaky tool call, a model hiccup) no longer kills
+/// an hours-long mission outright: it gets this many retries first. Each
+/// retry still counts as a normal step against the mission's own budget, so
+/// a stuck mission can't loop forever — it just gets a few tries before
+/// `Failed` becomes final.
+pub const MAX_AUTO_RETRIES: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +105,22 @@ pub struct Mission {
     /// Last few step notes (full history is in the audit log).
     pub recent: Vec<StepRecord>,
     pub result: Option<String>,
+    /// Upfront task breakdown (Planning Engine), when the runner provided
+    /// one via `StepOutcome::Plan`. Empty for missions that never planned
+    /// explicitly — older saved missions load fine with no plan (`default`).
+    #[serde(default)]
+    pub plan: Vec<PlanStep>,
+    /// Failures since the last non-`Failed` outcome; reset on any progress.
+    /// Not shown to the user directly — `recent`'s notes already explain a
+    /// retry in progress.
+    #[serde(default)]
+    pub consecutive_failures: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub description: String,
+    pub done: bool,
 }
 
 /// What one model step produced.
@@ -119,6 +141,13 @@ pub enum StepOutcome {
     },
     Failed {
         reason: String,
+    },
+    /// Upfront task breakdown (Planning Engine): replaces the mission's
+    /// `plan` wholesale. Doesn't have to be the first step — a mission can
+    /// also replan mid-way after learning something that changes the task
+    /// list — but produces no other side effect on its own.
+    Plan {
+        steps: Vec<String>,
     },
 }
 
@@ -208,6 +237,8 @@ impl MissionStore {
             next_approval_id: 1,
             recent: vec![],
             result: None,
+            plan: vec![],
+            consecutive_failures: 0,
         };
         self.save(&m)?;
         self.audit(&id, now_ms, "created", &m.goal)?;
@@ -328,6 +359,9 @@ impl MissionStore {
         }
         m.steps_done += 1;
         let outcome = run(&m);
+        if !matches!(outcome, StepOutcome::Failed { .. }) {
+            m.consecutive_failures = 0;
+        }
         let note = match &outcome {
             StepOutcome::Progress { note } => note.clone(),
             StepOutcome::NeedsApproval { summary, call } => {
@@ -347,9 +381,34 @@ impl MissionStore {
                 m.result = Some(result.clone());
                 result.clone()
             }
+            StepOutcome::Plan { steps } => {
+                m.plan = steps
+                    .iter()
+                    .map(|s| PlanStep {
+                        description: s.chars().take(300).collect(),
+                        done: false,
+                    })
+                    .collect();
+                self.audit(id, now_ms, "planned", &format!("{} steps", m.plan.len()))?;
+                format!("planned {} step(s)", m.plan.len())
+            }
             StepOutcome::Failed { reason } => {
-                m.status = Status::Failed;
-                reason.clone()
+                m.consecutive_failures += 1;
+                if m.consecutive_failures > MAX_AUTO_RETRIES {
+                    m.status = Status::Failed;
+                    reason.clone()
+                } else {
+                    self.audit(
+                        id,
+                        now_ms,
+                        "retrying_after_failure",
+                        &format!("attempt {}/{MAX_AUTO_RETRIES}: {reason}", m.consecutive_failures),
+                    )?;
+                    format!(
+                        "retrying after a failure ({reason}) — attempt {}/{MAX_AUTO_RETRIES}",
+                        m.consecutive_failures
+                    )
+                }
             }
         };
         m.progress = note.chars().take(300).collect();
@@ -533,19 +592,69 @@ mod tests {
     }
 
     #[test]
-    fn user_cannot_force_completed_and_failures_stop() {
+    fn user_cannot_force_completed_and_repeated_failures_eventually_stop() {
         let (_d, s) = store();
         let m = s
             .create("g", "general", Budget::new(5, H).unwrap(), 0)
             .unwrap();
         assert!(s.set_status(&m.id, Status::Completed, 1).is_err());
-        s.step(&m.id, 2, &mut |_| StepOutcome::Failed {
+        let mut fail = |_: &Mission| StepOutcome::Failed {
             reason: "model error".into(),
-        })
-        .unwrap();
-        assert_eq!(s.get(&m.id).unwrap().status, Status::Failed);
+        };
+        // A transient failure gets MAX_AUTO_RETRIES retries before the
+        // mission actually stops — a single hiccup must not kill an
+        // hours-long mission outright.
+        for _ in 0..MAX_AUTO_RETRIES {
+            let m = s.step(&m.id, 2, &mut fail).unwrap();
+            assert_eq!(m.status, Status::Running, "still retrying");
+        }
+        let m = s.step(&m.id, 2, &mut fail).unwrap();
+        assert_eq!(m.status, Status::Failed, "retries exhausted");
         assert!(s
             .create("   ", "general", Budget::new(5, H).unwrap(), 0)
             .is_err());
+    }
+
+    #[test]
+    fn a_later_success_resets_the_failure_streak() {
+        let (_d, s) = store();
+        let m = s
+            .create("g", "general", Budget::new(10, H).unwrap(), 0)
+            .unwrap();
+        let mut fail = |_: &Mission| StepOutcome::Failed { reason: "x".into() };
+        s.step(&m.id, 2, &mut fail).unwrap();
+        assert_eq!(s.get(&m.id).unwrap().consecutive_failures, 1);
+        s.step(&m.id, 3, &mut |_| StepOutcome::Progress { note: "ok".into() })
+            .unwrap();
+        assert_eq!(s.get(&m.id).unwrap().consecutive_failures, 0, "progress resets the streak");
+        // So the mission can now absorb MAX_AUTO_RETRIES more failures again.
+        for _ in 0..MAX_AUTO_RETRIES {
+            let m = s.step(&m.id, 4, &mut fail).unwrap();
+            assert_eq!(m.status, Status::Running);
+        }
+    }
+
+    #[test]
+    fn plan_outcome_sets_the_task_breakdown() {
+        let (_d, s) = store();
+        let m = s
+            .create("g", "general", Budget::new(5, H).unwrap(), 0)
+            .unwrap();
+        let f = s
+            .step(&m.id, 1, &mut |_| StepOutcome::Plan {
+                steps: vec!["ابحث عن الموضوع".into(), "اكتب الملخص".into()],
+            })
+            .unwrap();
+        assert_eq!(f.plan.len(), 2);
+        assert_eq!(f.plan[0].description, "ابحث عن الموضوع");
+        assert!(!f.plan[0].done);
+        assert_eq!(f.status, Status::Running, "planning alone doesn't finish the mission");
+        // Replanning replaces the breakdown wholesale.
+        let f2 = s
+            .step(&m.id, 2, &mut |_| StepOutcome::Plan {
+                steps: vec!["خطة جديدة".into()],
+            })
+            .unwrap();
+        assert_eq!(f2.plan.len(), 1);
     }
 }

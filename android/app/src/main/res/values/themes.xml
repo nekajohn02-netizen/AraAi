@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Ara" parent="android:Theme.Material.NoActionBar" />
+
+    <!-- Shown by the OS the instant the process starts, before any Kotlin
+         code runs — covers the time CoreBridge needs to open its on-disk
+         store. installSplashScreen() keeps it up via coreReady, then swaps
+         to Theme.Ara (see MainActivity.onCreate). -->
+    <style name="Theme.Ara.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ara_brand_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Ara</item>
+    </style>
+</resources>

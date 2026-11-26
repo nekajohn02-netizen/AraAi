@@ -21,7 +21,7 @@ use crate::activity_log::ActivityLog;
 use crate::conversations::ConversationStore;
 use crate::{parse, to_json, FfiError};
 use ara_coordinator::{Coordinator, IndexServices};
-use ara_core_api::{AraError, CancellationToken};
+use ara_core_api::{AraError, AraResult, CancellationToken};
 use ara_device_profiler::HostHints;
 use ara_inference::llama::LlamaEngine;
 use ara_inference::{GenerationParams, InferenceEngine, LoadParams, LoadedModel};
@@ -98,11 +98,64 @@ struct Settings {
     /// `false` (online) so existing installs see no behaviour change.
     #[serde(default)]
     strict_offline: bool,
+    /// Home Assistant base URL only (ADR-020) — never the access token,
+    /// which lives only in memory for the session (`AraCore::smarthome`),
+    /// the same pattern as API Hub's `CloudModel` api_key.
+    #[serde(default)]
+    smarthome_base_url: Option<String>,
+}
+
+/// In-memory Home Assistant connection (ADR-020). The token is supplied
+/// fresh by Kotlin each session from its own Keystore-backed storage and
+/// is never written to `settings.json`.
+struct SmartHomeSession {
+    base_url: String,
+    token: String,
 }
 
 struct Loaded {
     id: String,
     model: Box<dyn LoadedModel>,
+}
+
+/// Routes `Runtime::Service` tool calls to whichever store actually owns
+/// the state they need: the search index (`search_documents`/`remember`,
+/// unchanged, still `IndexServices`) or the in-memory Home Assistant
+/// session (`smarthome_list_devices`/`smarthome_control_device`, ADR-020).
+/// A chat turn only gets one `services` slot (`Coordinator::services`), so
+/// this composes both behind one `Services` impl rather than changing
+/// `IndexServices`'s own public shape.
+struct CoreServices<'a> {
+    index: IndexServices<'a>,
+    smarthome: &'a Mutex<Option<SmartHomeSession>>,
+}
+
+impl Services for CoreServices<'_> {
+    fn run(&self, call: &ToolCall) -> AraResult<serde_json::Value> {
+        match call.tool.as_str() {
+            "smarthome_list_devices" => {
+                let session = lock(self.smarthome);
+                let s = session.as_ref().ok_or_else(|| {
+                    AraError::InvalidInput("not connected to Home Assistant".into())
+                })?;
+                let ha = ara_smarthome::HomeAssistant::new(&s.base_url, &s.token)?;
+                Ok(serde_json::to_value(ha.states()?).map_err(|e| AraError::Internal(e.to_string()))?)
+            }
+            "smarthome_control_device" => {
+                let session = lock(self.smarthome);
+                let s = session.as_ref().ok_or_else(|| {
+                    AraError::InvalidInput("not connected to Home Assistant".into())
+                })?;
+                let ha = ara_smarthome::HomeAssistant::new(&s.base_url, &s.token)?;
+                let arg = |k: &str| {
+                    call.arguments.get(k).and_then(|v| v.as_str()).unwrap_or("")
+                };
+                ha.call_service(arg("domain"), arg("service"), arg("entity_id"))?;
+                Ok(serde_json::json!({ "ok": true }))
+            }
+            _ => self.index.run(call),
+        }
+    }
 }
 
 #[derive(uniffi::Object)]
@@ -122,7 +175,15 @@ pub struct AraCore {
     index: Mutex<SearchIndex>,
     providers: Mutex<Vec<Provider>>,
     missions: ara_missions::MissionStore,
+    scheduler: ara_scheduler::SchedulerStore,
+    events: ara_events::EventStore,
     activity_log: ActivityLog,
+    smarthome: Mutex<Option<SmartHomeSession>>,
+    /// Most recent thermal hint seen from any host call (`models`/
+    /// `device_profile`), used to throttle inference CPU threads on load.
+    /// `None` until the host has sent one — treated as "not hot" so a
+    /// pre-Android-Q device or the first call keeps today's behavior.
+    last_thermal: Mutex<Option<ara_device_profiler::ThermalState>>,
 }
 
 fn now_ms() -> u64 {
@@ -246,9 +307,13 @@ impl AraCore {
             index: Mutex::new(SearchIndex::open(&home.join("index.db"))?),
             providers: Mutex::new(read_json(&home.join("providers.json"))),
             missions: ara_missions::MissionStore::open(home.join("missions"))?,
+            scheduler: ara_scheduler::SchedulerStore::open(home.join("scheduled"))?,
+            events: ara_events::EventStore::open(home.join("event_rules"))?,
             activity_log: ActivityLog::open(home.join("activity.json")),
             imported_skills: Mutex::new(read_json(&home.join("skills_imported.json"))),
             skill_blocklist: Mutex::new(read_json(&home.join("skills_blocklist.json"))),
+            smarthome: Mutex::new(None),
+            last_thermal: Mutex::new(None),
             tools,
             skills,
             home,
@@ -259,6 +324,7 @@ impl AraCore {
 
     pub fn device_profile(&self, hints_json: String) -> Result<String, FfiError> {
         let hints: HostHints = parse("hints", &hints_json)?;
+        *lock(&self.last_thermal) = hints.thermal;
         to_json(&ara_device_profiler::collect(self.store.root(), hints)?)
     }
 
@@ -279,6 +345,7 @@ impl AraCore {
         })?;
         let capability: Capability = parse("capability", &format!("\"{}\"", persona.capability))?;
         let hints: HostHints = parse("hints", &hints_json)?;
+        *lock(&self.last_thermal) = hints.thermal;
         let device = ara_device_profiler::collect(self.store.root(), hints)?;
         let installed: BTreeSet<String> = self.store.installed_ids()?.into_iter().collect();
         let mode = match mode.as_str() {
@@ -365,10 +432,15 @@ impl AraCore {
             return Ok(());
         }
         *slot = None; // free the previous model's memory first
+        let total_cores = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4);
+        let threads = ara_device_profiler::thread_budget_for(total_cores, *lock(&self.last_thermal));
         let model = LlamaEngine.load(
             &self.store.model_path(&id),
             &LoadParams {
                 context: self.context().min(spec.max_context),
+                threads: Some(threads),
                 ..Default::default()
             },
         )?;
@@ -405,7 +477,9 @@ impl AraCore {
     }
 
     /// Short benchmark of the loaded model; stored to improve recommendations.
-    pub fn benchmark_loaded(&self) -> Result<String, FfiError> {
+    /// Cancellable (ADR-020 round: a benchmark can legitimately run for a
+    /// while on a slow device, and the UI had no way to stop it before).
+    pub fn benchmark_loaded(&self, cancel: Arc<CancelHandle>) -> Result<String, FfiError> {
         let base = ara_device_profiler::process_memory()?;
         let mut slot = lock(&self.model);
         let l = slot
@@ -421,7 +495,7 @@ impl AraCore {
                 temperature: 0.0,
                 ..Default::default()
             },
-            &CancellationToken::new(),
+            &cancel.0,
             &mut |_| {},
         )?;
         let mem = ara_device_profiler::process_memory()?;
@@ -520,7 +594,7 @@ impl AraCore {
         let persona = ara_tools::personas::find(&conv.persona)
             .unwrap_or_else(|_| ara_tools::personas::find("general").expect("built-in"));
         let memory = lock(&self.index).memory_prompt(1200)?;
-        let services = IndexServices(&self.index);
+        let services = CoreServices { index: IndexServices(&self.index), smarthome: &self.smarthome };
         let skills = self.all_skills();
         let c = Coordinator {
             tools: &self.tools,
@@ -582,7 +656,7 @@ impl AraCore {
         let outcome = match self.tools.dispatch(&call, &grants, true) {
             // Service tools (e.g. remember) run right here once approved.
             Dispatch::RunService { call } => {
-                let output = IndexServices(&self.index).run(&call)?;
+                let output = CoreServices { index: IndexServices(&self.index), smarthome: &self.smarthome }.run(&call)?;
                 Dispatch::Done {
                     tool: call.tool,
                     output,
@@ -640,6 +714,124 @@ impl AraCore {
         Ok(self.missions.resumable()?)
     }
 
+    // ------------------------------------------------------------ scheduler
+
+    /// Schedules a mission to start later instead of immediately.
+    /// `fire_in_minutes`: minutes from now until the first run (>= 1).
+    /// `repeat_every_minutes`: 0 for a one-shot task; otherwise the repeat
+    /// interval, which `ara_scheduler` rejects below its 15-minute floor —
+    /// the same floor Android's own `PeriodicWorkRequest` enforces, so a
+    /// mistaken "every minute" request can't become a battery drain.
+    pub fn create_scheduled_task(
+        &self,
+        goal: String,
+        persona: String,
+        max_steps: u32,
+        max_minutes: u32,
+        fire_in_minutes: u32,
+        repeat_every_minutes: u32,
+    ) -> Result<String, FfiError> {
+        let persona = if persona.is_empty() { "general".to_string() } else { persona };
+        ara_tools::personas::find(&persona)?;
+        let now = now_ms();
+        let fire_at = now + (fire_in_minutes.max(1) as u64) * 60_000;
+        let recurrence = if repeat_every_minutes == 0 {
+            ara_scheduler::Recurrence::Once
+        } else {
+            ara_scheduler::Recurrence::Repeating(repeat_every_minutes as u64 * 60_000)
+        };
+        to_json(&self.scheduler.create(
+            &goal,
+            &persona,
+            max_steps,
+            max_minutes as u64 * 60_000,
+            fire_at,
+            recurrence,
+            now,
+        )?)
+    }
+
+    pub fn scheduled_tasks(&self) -> Result<String, FfiError> {
+        to_json(&self.scheduler.list()?)
+    }
+
+    pub fn delete_scheduled_task(&self, id: String) -> Result<(), FfiError> {
+        Ok(self.scheduler.delete(&id)?)
+    }
+
+    pub fn set_scheduled_task_enabled(&self, id: String, enabled: bool) -> Result<(), FfiError> {
+        self.scheduler.set_enabled(&id, enabled)?;
+        Ok(())
+    }
+
+    /// Called periodically by the host (e.g. every 15 min via WorkManager):
+    /// turns every due scheduled task into a real mission and returns the
+    /// new mission ids so the caller can enqueue each one's first step.
+    /// Missions created this way run through the exact same budget/retry/
+    /// approval machinery as one started by hand — scheduling only ever
+    /// decides *when* one gets created, never how it runs.
+    pub fn fire_due_scheduled_tasks(&self) -> Result<Vec<String>, FfiError> {
+        let now = now_ms();
+        let mut created = Vec::new();
+        for req in self.scheduler.due_requests(now)? {
+            let budget = ara_missions::Budget::new(req.max_steps, req.max_duration_ms)?;
+            let mission = self.missions.create(&req.goal, &req.persona, budget, now)?;
+            self.scheduler.fire(&req.task_id, now, &mission.id)?;
+            created.push(mission.id);
+        }
+        Ok(created)
+    }
+
+    // ------------------------------------------------------------ event watcher
+
+    /// `kind`: battery_low | power_connected | power_disconnected |
+    /// network_available | network_lost.
+    pub fn create_event_rule(
+        &self,
+        kind: String,
+        goal: String,
+        persona: String,
+        max_steps: u32,
+        max_minutes: u32,
+    ) -> Result<String, FfiError> {
+        let kind: ara_events::EventKind = parse("kind", &format!("\"{kind}\""))?;
+        let persona = if persona.is_empty() { "general".to_string() } else { persona };
+        ara_tools::personas::find(&persona)?;
+        to_json(&self.events.create(kind, &goal, &persona, max_steps, max_minutes as u64 * 60_000, now_ms())?)
+    }
+
+    pub fn event_rules(&self) -> Result<String, FfiError> {
+        to_json(&self.events.list()?)
+    }
+
+    pub fn delete_event_rule(&self, id: String) -> Result<(), FfiError> {
+        Ok(self.events.delete(&id)?)
+    }
+
+    pub fn set_event_rule_enabled(&self, id: String, enabled: bool) -> Result<(), FfiError> {
+        self.events.set_enabled(&id, enabled)?;
+        Ok(())
+    }
+
+    /// Called by the host the moment it observes `kind` actually happen
+    /// (a `BroadcastReceiver`/`NetworkCallback` firing — Rust has no way to
+    /// watch for this itself). Turns every rule that matches and is past
+    /// its cooldown into a real mission, same composition as the
+    /// scheduler: this only ever decides *that* a mission gets created,
+    /// `ara_missions` still owns everything about running it.
+    pub fn fire_event(&self, kind: String) -> Result<Vec<String>, FfiError> {
+        let kind: ara_events::EventKind = parse("kind", &format!("\"{kind}\""))?;
+        let now = now_ms();
+        let mut created = Vec::new();
+        for req in self.events.due_requests(kind, now)? {
+            let budget = ara_missions::Budget::new(req.max_steps, req.max_duration_ms)?;
+            let mission = self.missions.create(&req.goal, &req.persona, budget, now)?;
+            self.events.fire(&req.rule_id, now, &mission.id)?;
+            created.push(mission.id);
+        }
+        Ok(created)
+    }
+
     /// Runs one step of a mission on the loaded model (call from a
     /// background worker). Returns the updated mission JSON.
     pub fn run_mission_step(
@@ -651,7 +843,7 @@ impl AraCore {
         let persona = ara_tools::personas::find(&m0.persona)?;
         let grants = lock(&self.grants).clone();
         let memory = lock(&self.index).memory_prompt(1200)?;
-        let services = ara_coordinator::IndexServices(&self.index);
+        let services = CoreServices { index: ara_coordinator::IndexServices(&self.index), smarthome: &self.smarthome };
         let mut slot = lock(&self.model);
         let loaded = slot
             .as_mut()
@@ -668,14 +860,28 @@ impl AraCore {
                 persona: Some(&persona),
             };
             let recent: Vec<String> = m.recent.iter().rev().take(5).rev().map(|r| format!("- {}", r.note)).collect();
-            let prompt = format!(
-                "Mission goal: {}\nStep {} of at most {}.\nProgress so far:\n{}\n\nDo the next useful step toward the goal. \
+            // The mission's very first step is spent entirely on planning
+            // (Planning Engine): one extra step out of up to MAX_STEPS_LIMIT
+            // budgeted ones, in exchange for a real, visible task breakdown
+            // instead of the model re-deriving "what's next" from scratch
+            // every tick with no explicit plan to check progress against.
+            let is_planning_step = m.steps_done == 1 && m.plan.is_empty();
+            let prompt = if is_planning_step {
+                format!(
+                    "Mission goal: {}\n\nBreak this goal into 3 to 6 short, concrete, ordered steps. \
+Reply with exactly: PLAN: then each step on its own line, nothing else.",
+                    m.goal
+                )
+            } else {
+                format!(
+                    "Mission goal: {}\nStep {} of at most {}.\nProgress so far:\n{}\n\nDo the next useful step toward the goal. \
 When the goal is fully achieved, start your reply with DONE: followed by the result. Otherwise end with one line summarizing what you did.",
-                m.goal,
-                m.steps_done,
-                m.budget.max_steps,
-                if recent.is_empty() { "(nothing yet)".to_string() } else { recent.join("\n") }
-            );
+                    m.goal,
+                    m.steps_done,
+                    m.budget.max_steps,
+                    if recent.is_empty() { "(nothing yet)".to_string() } else { recent.join("\n") }
+                )
+            };
             let params = GenerationParams { max_tokens: 400, ..Default::default() };
             match c.run_turn(&mut *loaded.model, &[], &prompt, &params, &cancel.0, &mut |_| {}) {
                 Ok(r) => {
@@ -699,6 +905,25 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
                         };
                     }
                     let text = r.text.trim().to_string();
+                    if is_planning_step {
+                        let steps: Vec<String> = text
+                            .trim_start_matches("PLAN:")
+                            .lines()
+                            .map(|l| l.trim().trim_start_matches(['-', '*']).trim().to_string())
+                            .filter(|l| !l.is_empty())
+                            .take(10)
+                            .collect();
+                        // The model didn't follow the format — don't fail an
+                        // hours-long mission over a formatting miss; just
+                        // treat it as a normal first step and move on.
+                        return if steps.is_empty() {
+                            ara_missions::StepOutcome::Progress {
+                                note: text.lines().last().unwrap_or("planning").to_string(),
+                            }
+                        } else {
+                            ara_missions::StepOutcome::Plan { steps }
+                        };
+                    }
                     match text.strip_prefix("DONE:") {
                         Some(res) => ara_missions::StepOutcome::Done { result: res.trim().to_string() },
                         None => ara_missions::StepOutcome::Progress {
@@ -850,6 +1075,92 @@ When the goal is fully achieved, start your reply with DONE: followed by the res
 
     pub fn strict_offline(&self) -> bool {
         lock(&self.settings).strict_offline
+    }
+
+    // ------------------------------------------------------------ smart home (ADR-020)
+
+    /// Base URL of the last-connected Home Assistant, if any — the token
+    /// itself is never persisted, so the app still needs the user to supply
+    /// it again (from its own Keystore-backed storage) before `connect`.
+    pub fn smarthome_base_url(&self) -> Option<String> {
+        lock(&self.settings).smarthome_base_url.clone()
+    }
+
+    pub fn smarthome_connected(&self) -> bool {
+        lock(&self.smarthome).is_some()
+    }
+
+    /// Validates the URL and actually reaches the given Home Assistant,
+    /// without connecting — the entity count doubles as "test connection".
+    pub fn smarthome_test_connection(&self, base_url: String, token: String) -> Result<u32, FfiError> {
+        let ha = ara_smarthome::HomeAssistant::new(&base_url, &token)?;
+        Ok(ha.states()?.len() as u32)
+    }
+
+    /// Keeps the connection in memory for this run and remembers the base
+    /// URL (not the token) for next time. Does not itself verify
+    /// reachability — call `smarthome_test_connection` first if that matters
+    /// to the caller.
+    pub fn smarthome_connect(&self, base_url: String, token: String) -> Result<(), FfiError> {
+        let base_url = ara_smarthome::validate_base_url(&base_url)?;
+        {
+            let mut s = lock(&self.settings);
+            s.smarthome_base_url = Some(base_url.clone());
+            write_json(&self.home.join("settings.json"), &*s)?;
+        }
+        *lock(&self.smarthome) = Some(SmartHomeSession { base_url, token });
+        Ok(())
+    }
+
+    pub fn smarthome_disconnect(&self) -> Result<(), FfiError> {
+        *lock(&self.smarthome) = None;
+        let mut s = lock(&self.settings);
+        s.smarthome_base_url = None;
+        write_json(&self.home.join("settings.json"), &*s)
+    }
+
+    /// "Scan network" button in Smart Home setup: finds devices already on
+    /// the same Wi-Fi/LAN (SSDP/UPnP) so the user doesn't have to type a
+    /// Home Assistant IP by hand. Can never discover or reach anything off
+    /// the local network — see `ara_lan_discovery`'s module docs — and
+    /// never actuates anything; it only reads devices' own self-announcements.
+    /// `timeout_ms` is clamped to [500, 5000] so a careless caller can't
+    /// block the IO-dispatcher coroutine indefinitely.
+    pub fn scan_lan_devices(&self, timeout_ms: u32) -> Result<String, FfiError> {
+        let timeout = std::time::Duration::from_millis(timeout_ms.clamp(500, 5000) as u64);
+        to_json(&ara_lan_discovery::discover_lan_devices(timeout))
+    }
+
+    /// Direct, read-only device list for the Kotlin UI — the user looking
+    /// at their own devices, not the model acting; no confirmation gate
+    /// applies (matches `smarthome_list_devices`'s `SideEffect::None`).
+    pub fn smarthome_devices(&self) -> Result<String, FfiError> {
+        let session = lock(&self.smarthome);
+        let s = session
+            .as_ref()
+            .ok_or_else(|| AraError::InvalidInput("not connected to Home Assistant".into()))?;
+        let ha = ara_smarthome::HomeAssistant::new(&s.base_url, &s.token)?;
+        to_json(&ha.states()?)
+    }
+
+    /// Direct device control for the Kotlin UI's own manual toggle — the
+    /// user's own tap on this screen **is** the confirmation. This is
+    /// different from the chat tool `smarthome_control_device`, which the
+    /// model can request and which always stops for a *separate*
+    /// confirmation through `confirm_action` (ADR-006/ADR-020) — never
+    /// skip that gate just because this direct path exists.
+    pub fn smarthome_call_service(
+        &self,
+        domain: String,
+        service: String,
+        entity_id: String,
+    ) -> Result<(), FfiError> {
+        let session = lock(&self.smarthome);
+        let s = session
+            .as_ref()
+            .ok_or_else(|| AraError::InvalidInput("not connected to Home Assistant".into()))?;
+        let ha = ara_smarthome::HomeAssistant::new(&s.base_url, &s.token)?;
+        Ok(ha.call_service(&domain, &service, &entity_id)?)
     }
 
     /// Makes a configured provider the active model. Requires consent. The
@@ -1164,6 +1475,84 @@ mod tests {
             .unwrap()
             .iter()
             .any(|f| f["id"] == "file_modified"));
+    }
+
+    #[test]
+    fn scheduled_task_round_trips_through_core_and_nothing_fires_before_its_time() {
+        // The actual "due task becomes a real mission, with catch-up-safe
+        // rescheduling" behavior is exercised thoroughly in ara_scheduler's
+        // own tests with injected timestamps; `now_ms()` here is real wall
+        // clock, so this only checks the FFI plumbing (JSON shapes, that
+        // nothing fires early, delete/list), not timing.
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        assert!(
+            core.create_scheduled_task("x".into(), "general".into(), 10, 60, 30, 10).is_err(),
+            "repeat interval below the 15-minute floor must be rejected"
+        );
+        let t: serde_json::Value = serde_json::from_str(
+            &core
+                .create_scheduled_task("راجع البريد".into(), "general".into(), 10, 60, 30, 0)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(t["enabled"], true);
+        assert_eq!(t["goal"], "راجع البريد");
+        assert!(core.fire_due_scheduled_tasks().unwrap().is_empty(), "not due for 30 minutes yet");
+
+        let tasks: serde_json::Value = serde_json::from_str(&core.scheduled_tasks().unwrap()).unwrap();
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+
+        core.set_scheduled_task_enabled(t["id"].as_str().unwrap().into(), false).unwrap();
+        let after: serde_json::Value = serde_json::from_str(&core.scheduled_tasks().unwrap()).unwrap();
+        assert_eq!(after[0]["enabled"], false);
+
+        core.delete_scheduled_task(t["id"].as_str().unwrap().into()).unwrap();
+        let remaining: serde_json::Value = serde_json::from_str(&core.scheduled_tasks().unwrap()).unwrap();
+        assert_eq!(remaining.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn event_rule_fires_into_a_mission_and_respects_its_cooldown() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        assert!(core.create_event_rule("not_a_kind".into(), "g".into(), "general".into(), 10, 60).is_err());
+
+        let r: serde_json::Value = serde_json::from_str(
+            &core
+                .create_event_rule("battery_low".into(), "خفف السطوع".into(), "general".into(), 10, 60)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r["enabled"], true);
+        // Wrong event kind never fires this rule.
+        assert!(core.fire_event("network_available".into()).unwrap().is_empty());
+
+        let created = core.fire_event("battery_low".into()).unwrap();
+        assert_eq!(created.len(), 1);
+        let mission: serde_json::Value = serde_json::from_str(&core.mission(created[0].clone()).unwrap()).unwrap();
+        assert_eq!(mission["goal"], "خفف السطوع");
+
+        // Firing again immediately (the device can report battery-low
+        // repeatedly in a short span) must not spawn a second mission —
+        // this is the mission-storm guard, exercised through the real FFI
+        // path rather than just ara_events' own unit tests.
+        assert!(
+            core.fire_event("battery_low".into()).unwrap().is_empty(),
+            "still inside the cooldown"
+        );
+
+        let rules: serde_json::Value = serde_json::from_str(&core.event_rules().unwrap()).unwrap();
+        assert_eq!(rules[0]["last_mission_id"], created[0]);
+        assert_eq!(rules[0]["enabled"], true, "event rules stay enabled, unlike one-shot scheduled tasks");
+
+        core.set_event_rule_enabled(r["id"].as_str().unwrap().into(), false).unwrap();
+        core.delete_event_rule(r["id"].as_str().unwrap().into()).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&core.event_rules().unwrap())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1535,5 +1924,158 @@ mod tests {
             .cloud_models("https://127.0.0.1.invalid.example".into(), "k".into())
             .unwrap_err();
         assert!(!err.to_string().contains("no network request was attempted"));
+    }
+
+    /// Minimal mock Home Assistant: replies with `states_json` to
+    /// `GET /api/states` and with an empty array to any
+    /// `POST /api/services/...`, recording the last request line it saw.
+    /// Same style as `ara-smarthome`'s/`ara-cloud`'s own mock-server tests.
+    fn mock_home_assistant(states_json: &str) -> (String, std::sync::Arc<std::sync::Mutex<String>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let s2 = seen.clone();
+        let states_json = states_json.to_string();
+        std::thread::spawn(move || {
+            for stream in l.incoming() {
+                let Ok(mut c) = stream else { break };
+                let mut buf = vec![0u8; 65536];
+                let mut req_bytes = Vec::new();
+                loop {
+                    let n = c.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    req_bytes.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&req_bytes).to_string();
+                    let Some(header_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let content_len = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if req_bytes.len() >= header_end + 4 + content_len {
+                        break;
+                    }
+                }
+                let req = String::from_utf8_lossy(&req_bytes).to_string();
+                *s2.lock().unwrap() = req.clone();
+                let body = if req.starts_with("GET /api/states") {
+                    states_json.clone()
+                } else {
+                    "[]".to_string()
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = c.write_all(resp.as_bytes());
+            }
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn smarthome_test_connection_and_devices_reach_a_real_mock_server() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        let (url, seen) = mock_home_assistant(
+            r#"[{"entity_id":"light.kitchen","state":"off","attributes":{"friendly_name":"Kitchen"}}]"#,
+        );
+
+        let count = core
+            .smarthome_test_connection(url.clone(), "tok-123".into())
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(seen.lock().unwrap().contains("Bearer tok-123"));
+
+        assert!(!core.smarthome_connected());
+        core.smarthome_connect(url.clone(), "tok-123".into()).unwrap();
+        assert!(core.smarthome_connected());
+        assert_eq!(core.smarthome_base_url(), Some(url));
+
+        let devices: serde_json::Value =
+            serde_json::from_str(&core.smarthome_devices().unwrap()).unwrap();
+        assert_eq!(devices[0]["entity_id"], "light.kitchen");
+    }
+
+    /// Proves the access token is never persisted to disk — only the base
+    /// URL survives a restart, matching `CloudModel`'s api_key handling and
+    /// documented explicitly in `Settings::smarthome_base_url`'s doc comment.
+    #[test]
+    fn smarthome_token_does_not_survive_a_restart_only_the_base_url_does() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().to_string_lossy().to_string();
+        let (url, _) = mock_home_assistant("[]");
+        {
+            let core = AraCore::new(path.clone()).unwrap();
+            core.smarthome_connect(url.clone(), "secret-tok".into()).unwrap();
+            assert!(core.smarthome_connected());
+        }
+        let reopened = AraCore::new(path).unwrap();
+        assert_eq!(reopened.smarthome_base_url(), Some(url));
+        assert!(!reopened.smarthome_connected(), "token must not survive a restart");
+        let settings_raw = std::fs::read_to_string(d.path().join("settings.json")).unwrap();
+        assert!(!settings_raw.contains("secret-tok"), "token leaked into settings.json");
+    }
+
+    #[test]
+    fn smarthome_control_through_confirm_action_reaches_the_mock_server_only_after_approval() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        let (url, seen) = mock_home_assistant("[]");
+        core.smarthome_connect(url, "tok".into()).unwrap();
+        core.set_permission("smart_home".into(), "always".into()).unwrap();
+
+        let call = serde_json::json!({
+            "tool": "smarthome_control_device",
+            "arguments": {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"},
+        })
+        .to_string();
+
+        // Declining never reaches the network at all.
+        let declined: serde_json::Value =
+            serde_json::from_str(&core.confirm_action(call.clone(), false).unwrap()).unwrap();
+        assert_eq!(declined["outcome"], "denied");
+        assert!(seen.lock().unwrap().is_empty(), "decline must not touch the network");
+
+        // Approving actually calls the service on the mock Home Assistant.
+        let approved: serde_json::Value =
+            serde_json::from_str(&core.confirm_action(call, true).unwrap()).unwrap();
+        assert_eq!(approved["outcome"], "done");
+        let req = seen.lock().unwrap().clone();
+        assert!(req.starts_with("POST /api/services/light/turn_on"), "{req}");
+        assert!(req.contains("light.kitchen"));
+    }
+
+    #[test]
+    fn smarthome_actions_fail_clearly_when_nothing_is_connected() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        assert!(core.smarthome_devices().unwrap_err().to_string().contains("not connected"));
+        assert!(core
+            .smarthome_call_service("light".into(), "turn_on".into(), "light.x".into())
+            .unwrap_err()
+            .to_string()
+            .contains("not connected"));
+    }
+
+    #[test]
+    fn scan_lan_devices_returns_a_valid_json_array_through_the_ffi_boundary() {
+        let d = tempfile::tempdir().unwrap();
+        let core = AraCore::new(d.path().to_string_lossy().into()).unwrap();
+        // No real UPnP devices in CI, so this just proves the FFI plumbing
+        // (clamped timeout, JSON encoding) is sound, not that devices were
+        // found — `ara_lan_discovery`'s own tests cover parsing/discovery.
+        let json = core.scan_lan_devices(1).unwrap(); // clamped up to the 500ms floor, keeps the test fast
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.is_array());
     }
 }

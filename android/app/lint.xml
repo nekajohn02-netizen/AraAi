@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- UniFFI-generated Kotlin bindings (regenerated from Rust by the
+         buildRustCore Gradle task every build — never hand-edited, so a
+         lint finding here can't be fixed in this source tree anyway).
+         The NewApi hits on java.lang.ref.Cleaner are a false positive:
+         the generated code already guards every use with
+         `Class.forName("java.lang.ref.Cleaner")` inside a try/catch
+         before ever constructing JavaLangRefCleaner, so on API < 33 it
+         takes the UniffiJnaCleaner() fallback branch instead and the
+         Cleaner-using code never actually runs — lint's static NewApi
+         checker can't trace that runtime guard. -->
+    <issue id="NewApi">
+        <ignore path="**/rust/kotlin/uniffi/**" />
+    </issue>
+</lint>

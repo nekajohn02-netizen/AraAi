@@ -1,10 +1,13 @@
 package ai.ara.app
 
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
@@ -34,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -54,10 +59,24 @@ fun FilesScreen(bridge: CoreBridge) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    var confirmDeleteDoc by remember { mutableStateOf<JSONObject?>(null) }
+    var confirmDeleteMem by remember { mutableStateOf<JSONObject?>(null) }
 
     LaunchedEffect(reload) {
         docs = bridge.io { JSONArray(documents()) }.objects()
         mems = bridge.io { JSONArray(memories()) }.objects()
+    }
+    // A LaunchedEffect keyed on `query` cancels the previous search when the
+    // text changes again, instead of firing one uncancelled coroutine per
+    // keystroke (the old code could let a slow search for an earlier, shorter
+    // query finish after a newer one and overwrite its correct results).
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            hits = emptyList()
+            return@LaunchedEffect
+        }
+        delay(200)
+        hits = bridge.io { JSONArray(searchDocuments(query)) }.objects()
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -75,7 +94,7 @@ fun FilesScreen(bridge: CoreBridge) {
                     } ?: continue
                     bridge.io { importDocument(name, bytes) }
                 } catch (e: Exception) {
-                    errors += "$name: ${e.message}"
+                    errors += "$name: ${e.rethrowIfCancellation().message}"
                 }
             }
             message = errors.joinToString("\n").ifEmpty { null }
@@ -96,18 +115,26 @@ fun FilesScreen(bridge: CoreBridge) {
                 picker.launch(arrayOf("text/*", "application/json", "text/csv", "text/markdown", "text/html", "application/pdf"))
             }) { Text(stringResource(R.string.import_files)) }
         }
-        if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        message?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        item {
+            AnimatedVisibility(
+                busy, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis())),
+            ) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        }
+        item {
+            AnimatedVisibility(
+                message != null, enter = fadeIn(tween(motionMillis())), exit = fadeOut(tween(motionMillis())),
+            ) {
+                Text(message.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.liveRegionAnnounce())
+            }
+        }
 
         item {
-            OutlinedTextField(query, {
-                query = it
-                scope.launch { hits = bridge.io { JSONArray(searchDocuments(it)) }.objects() }
-            }, Modifier.fillMaxWidth(), placeholder = { Text(stringResource(R.string.search_files)) }, singleLine = true)
+            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
+                placeholder = { Text(stringResource(R.string.search_files)) }, singleLine = true)
         }
         if (query.isNotBlank() && hits.isEmpty()) item { Text(stringResource(R.string.no_results)) }
         items(hits) { h ->
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth().animateItem()) {
                 Column(Modifier.padding(12.dp)) {
                     Text("${h.getString("document")} · ${stringResource(R.string.line_n, h.getInt("line"))}",
                         style = MaterialTheme.typography.labelLarge)
@@ -119,14 +146,12 @@ fun FilesScreen(bridge: CoreBridge) {
         item { Text(stringResource(R.string.my_documents), style = MaterialTheme.typography.titleMedium) }
         if (docs.isEmpty()) item { Text(stringResource(R.string.no_documents)) }
         items(docs, key = { "d" + it.getLong("id") }) { d ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().animateItem(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(d.getString("name"))
                     Text(Formatter.formatShortFileSize(ctx, d.getLong("bytes")), style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton({ scope.launch { bridge.io { deleteDocument(d.getLong("id")) }; reload++ } }) {
-                    Text(stringResource(R.string.delete))
-                }
+                TextButton({ confirmDeleteDoc = d }) { Text(stringResource(R.string.delete)) }
             }
         }
 
@@ -148,28 +173,44 @@ fun FilesScreen(bridge: CoreBridge) {
             }
         }
         items(mems, key = { "m" + it.getLong("id") }) { m ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().animateItem(), verticalAlignment = Alignment.CenterVertically) {
                 Text(m.getString("text"), Modifier.weight(1f))
                 Switch(m.getBoolean("enabled"), { on ->
                     scope.launch { bridge.io { setMemoryEnabled(m.getLong("id"), on) }; reload++ }
                 })
-                TextButton({ scope.launch { bridge.io { deleteMemory(m.getLong("id")) }; reload++ } }) {
-                    Text(stringResource(R.string.delete))
-                }
+                TextButton({ confirmDeleteMem = m }) { Text(stringResource(R.string.delete)) }
             }
         }
         item { Text("", Modifier.padding(bottom = 24.dp)) }
     }
-}
 
-private fun nameAndSize(ctx: android.content.Context, uri: Uri): Pair<String, Long> {
-    ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
-        ?.use { c ->
-            if (c.moveToFirst()) {
-                val name = c.getString(0) ?: "file.txt"
-                val size = if (c.isNull(1)) 0L else c.getLong(1)
-                return name to size
-            }
-        }
-    return (uri.lastPathSegment ?: "file.txt") to 0L
+    confirmDeleteDoc?.let { d ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteDoc = null },
+            title = { Text(stringResource(R.string.delete_document_title)) },
+            text = { Text(stringResource(R.string.delete_document_body, d.getString("name"))) },
+            confirmButton = {
+                Button({
+                    confirmDeleteDoc = null
+                    scope.launch { bridge.io { deleteDocument(d.getLong("id")) }; reload++ }
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton({ confirmDeleteDoc = null }) { Text(stringResource(R.string.decline)) } },
+        )
+    }
+
+    confirmDeleteMem?.let { m ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteMem = null },
+            title = { Text(stringResource(R.string.delete_memory_title)) },
+            text = { Text(stringResource(R.string.delete_memory_body, m.getString("text"))) },
+            confirmButton = {
+                Button({
+                    confirmDeleteMem = null
+                    scope.launch { bridge.io { deleteMemory(m.getLong("id")) }; reload++ }
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton({ confirmDeleteMem = null }) { Text(stringResource(R.string.decline)) } },
+        )
+    }
 }

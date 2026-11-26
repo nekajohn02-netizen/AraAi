@@ -129,7 +129,9 @@ object HostActions {
             else -> "unsupported action"
         }
     } catch (e: Exception) {
-        e.javaClass.simpleName
+        // Prefer the real message (e.g. a malformed tool argument) over the
+        // exception's class name, which told the user nothing useful.
+        e.message ?: e.javaClass.simpleName
     }
 
     private fun sendText(text: String) =

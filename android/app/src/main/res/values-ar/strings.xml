@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">آرا</string>
+    <!-- app_name intentionally not overridden here: "Ara" is the product's
+         English name in every locale (see identity principles in the
+         product blueprint); only the rest of the UI is Arabic. -->
     <string name="tab_chat">المحادثة</string>
     <string name="tab_models">النماذج</string>
     <string name="tab_missions">المهام</string>
@@ -33,6 +35,8 @@
     <string name="benchmark">قياس السرعة</string>
     <string name="delete">حذف</string>
     <string name="models_note">النماذج من ناشريها الرسميين، بتراخيص مفتوحة وبصمة SHA-256 يتم التحقق منها. التقديرات تتحسن بعد «قياس السرعة». التنزيل هو الاستخدام الوحيد للإنترنت في آرا.</string>
+    <string name="delete_model_title">حذف هذا النموذج؟</string>
+    <string name="delete_model_body">هيتمسح الملف اللي نزّلته من على الجهاز. تقدر تنزّله تاني بعدين وقت ما تحتاجه.</string>
 
     <string name="running_locally">يعمل محليًا · %1$s</string>
     <string name="no_model_loaded">لا يوجد نموذج محمّل</string>
@@ -48,11 +52,42 @@
     <string name="stop">إيقاف</string>
     <string name="close">إغلاق</string>
     <string name="no_conversations">لا توجد محادثات بعد.</string>
+    <string name="search_conversations">ابحث في المحادثات…</string>
+    <string name="delete_conversation_title">حذف المحادثة دي؟</string>
+    <string name="delete_conversation_body">مينفعش ترجع تاني بعد الحذف.</string>
 
     <string name="skills_title">المهارات والصلاحيات</string>
     <string name="skills_note">المهارات تسمح لآرا بتنفيذ مهام على هاتفك. كل مهارة تحتاج موافقتك، ويمكنك تغييرها في أي وقت.</string>
     <string name="no_permission_needed">لا تحتاج صلاحية (تعمل داخل آرا).</string>
     <string name="external_always_confirm">أي شيء يصل لأشخاص آخرين (رسائل، منشورات، مكالمات) يطلب موافقتك دائمًا، وأنت من يضغط إرسال في التطبيق نفسه.</string>
+    <string name="import_skill">استيراد ملف مهارة…</string>
+    <string name="skill_imported_tag">مستوردة</string>
+    <string name="import_skill_warning_title">غير مراجَعة من آرا</string>
+    <string name="import_skill_warning_body">المهارة دي لم تتم مراجعتها ولا توقيعها من آرا. استوردها بس لو واثق في مصدرها.</string>
+    <string name="import_skill_tools_requested">هتقدر تستخدم: %1$s</string>
+    <string name="import_skill_confirm">فهمت، فعّلها</string>
+    <string name="delete_skill_title">حذف المهارة المستوردة دي؟</string>
+    <string name="delete_skill_body">هتتوقف عن العمل فورًا، مش محتاجة إعادة تشغيل.</string>
+    <string name="strict_offline_title">وضع عدم الاتصال الصارم</string>
+    <string name="strict_offline_note">يمنع أي استدعاء لنموذج سحابي قبل ما يفتح اتصال أصلًا. تنزيل النماذج اللي تبدأه بنفسك بيفضل شغّال — ده بس بيأثر على استدعاءات السحابة.</string>
+    <string name="perm_smart_home">أجهزة البيت الذكي</string>
+    <string name="smarthome_title">البيت الذكي</string>
+    <string name="smarthome_note">وصّل Home Assistant بتاعك عشان تشوف وتتحكم في أجهزته. آرا بيكلم الـhub بتاعك بس، مش أي جهاز مباشرة.</string>
+    <string name="smarthome_url">رابط Home Assistant</string>
+    <string name="smarthome_token">توكن الدخول طويل المدى</string>
+    <string name="smarthome_connect">اتصال</string>
+    <string name="smarthome_connected_count">اتوصل — لقينا %1$d جهاز</string>
+    <string name="smarthome_connected_to">متصل بـ %1$s</string>
+    <string name="smarthome_disconnect">قطع الاتصال</string>
+    <string name="process_text_label">اسأل آرا</string>
+    <string name="voice_input_label">تحدث</string>
+    <string name="voice_listening">بسمعك…</string>
+    <string name="voice_not_available">مفيش خدمة تعرّف على الصوت على الجهاز ده.</string>
+    <string name="voice_no_permission">محتاجين صلاحية الميكروفون عشان تتكلم.</string>
+    <string name="voice_no_speech">معلش، مسمعتش حاجة. جرّب تاني.</string>
+    <string name="speak_replies_title">اقرأ الردود بصوت عالٍ</string>
+    <string name="speak_replies_note">بيستخدم محوّل النص لصوت الموجود في الهاتف نفسه — بلا إنترنت ولا أي خدمة خارجية.</string>
+    <string name="process_text_prefill_note">متلصق من تطبيق تاني. راجعه قبل ما تبعته.</string>
     <string name="grant_denied">مقفول</string>
     <string name="grant_ask">اسألني</string>
     <string name="grant_always">مسموح</string>
@@ -74,9 +109,15 @@
     <string name="context_note">الأصغر يستهلك ذاكرة أقل، والأكبر يتذكر أكثر من المحادثة. يطبّق عند تحميل النموذج التالي.</string>
     <string name="privacy_title">الخصوصية</string>
     <string name="privacy_body">المحادثات والنماذج والإعدادات تبقى على هذا الهاتف ومستبعدة من النسخ الاحتياطي السحابي. آرا يستخدم الإنترنت فقط لتنزيل النماذج التي تختارها.</string>
+    <string name="reduce_motion_title">تقليل الحركة</string>
+    <string name="reduce_motion_note">يوقف الانتقالات والحركات في آرا. إعداد \"إزالة الرسوم المتحركة\" في خيارات المطورين بالنظام يوقفها تلقائيًا أيضًا.</string>
     <string name="tab_files">ملفاتي</string>
     <string name="files_title">ملفاتي والذاكرة</string>
     <string name="files_note">استورد ملفات نصية (TXT، Markdown، CSV، JSON، HTML) أو PDF ليجيب آرا منها مع ذكر المصدر (رقم الصفحة في ملفات PDF). الملفات تبقى على هاتفك.</string>
+    <string name="delete_document_title">حذف الملف ده؟</string>
+    <string name="delete_document_body">\"%1$s\" هيتحذف من فهرس البحث والتخزين بتاع آرا. مينفعش يترجع تاني.</string>
+    <string name="delete_memory_title">حذف الذكرى دي؟</string>
+    <string name="delete_memory_body">\"%1$s\" مش هيفتكرها تاني.</string>
     <string name="import_files">استيراد ملفات</string>
     <string name="search_files">ابحث في ملفاتك…</string>
     <string name="no_results">لا توجد نتائج في ملفاتك.</string>
@@ -95,6 +136,8 @@
     <string name="shield_off">درع الخصوصية متوقف</string>
     <string name="allow_sending">السماح…</string>
     <string name="add_provider">إضافة مزود</string>
+    <string name="delete_provider_title">حذف المزود ده؟</string>
+    <string name="delete_provider_body">\"%1$s\" ومفتاحه المحفوظ هيتمسحوا من على الجهاز.</string>
     <string name="api_key">مفتاح API</string>
     <string name="test_connection">اختبار الاتصال</string>
     <string name="connection_ok">تم الاتصال — %1$d نموذج متاح</string>
@@ -113,6 +156,7 @@
     <string name="no_missions">لا توجد مهام بعد.</string>
     <string name="mission_status_line">%1$s · خطوة %2$d من %3$d</string>
     <string name="mission_result">النتيجة: %1$s</string>
+    <string name="mission_plan_title">الخطة</string>
     <string name="pause">إيقاف مؤقت</string>
     <string name="resume_mission">استكمال</string>
     <string name="mission_log">السجل</string>
@@ -122,6 +166,20 @@
     <string name="mission_max_steps">أقصى عدد خطوات</string>
     <string name="mission_max_time">أقصى وقت</string>
     <string name="start_mission">ابدأ</string>
+    <string name="mission_schedule_later">جدولة لوقت لاحق</string>
+    <string name="mission_schedule_delay">تبدأ بعد</string>
+    <string name="mission_schedule_repeat_daily">تتكرر يوميًا</string>
+    <string name="mission_schedule_next">المرة الجاية: %1$s</string>
+    <string name="mission_schedule_repeating">(متكررة)</string>
+    <string name="scheduled_tasks_title">المهام المجدولة</string>
+    <string name="event_rules_title">مراقبة الأحداث</string>
+    <string name="event_rules_note">شغّل مهمة تلقائيًا عند حدوث شيء على الجهاز.</string>
+    <string name="new_event_rule">قاعدة جديدة</string>
+    <string name="event_kind_battery_low">البطارية منخفضة</string>
+    <string name="event_kind_power_connected">بدء الشحن</string>
+    <string name="event_kind_power_disconnected">توقف الشحن</string>
+    <string name="event_kind_network_available">عودة الإنترنت</string>
+    <string name="event_kind_network_lost">فقدان الاتصال</string>
     <string name="mission_channel">تحديثات المهام</string>
     <string name="mission_needs_approval">محتاجة موافقتك</string>
     <string name="mission_done">خلصت</string>
@@ -139,5 +197,15 @@
     <string name="security_score">النتيجة: %1$d / 100</string>
     <string name="security_checks_run">الفحوصات المنفَّذة: %1$s</string>
     <string name="security_no_findings">لا توجد ملاحظات.</string>
+    <string name="privacy_log_title">سجل الخصوصية</string>
+    <string name="privacy_log_note">اللي آرا عمله فعلًا: إيه الأداة اللي اشتغلت وهل اتسمحلها ولا لأ — مش محتوى الرسائل ولا بيانات الاستدعاء نفسه.</string>
+    <string name="privacy_log_open">فتح السجل</string>
+    <string name="privacy_log_empty">لسه مفيش حاجة مسجّلة.</string>
+    <string name="privacy_log_via_skills">عن طريق: %1$s</string>
+    <string name="privacy_log_outcome_done">تم</string>
+    <string name="privacy_log_outcome_needs_confirmation">طلب تأكيدك</string>
+    <string name="privacy_log_outcome_run_on_host">فتح تطبيق</string>
+    <string name="privacy_log_outcome_run_service">اتنفذ جوه آرا</string>
+    <string name="privacy_log_outcome_denied">اترفض</string>
     <string name="security_evidence">الدليل: %1$s</string>
 </resources>

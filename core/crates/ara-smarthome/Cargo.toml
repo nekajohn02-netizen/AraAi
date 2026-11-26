@@ -1,0 +1,12 @@
+[package]
+name = "ara-smarthome"
+description = "Local network smart-home control through an existing hub (Home Assistant's REST API) — Ara never speaks a device vendor's proprietary protocol directly."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ara-core-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "=3.5.1", default-features = false, features = ["rustls"] }

@@ -76,9 +76,25 @@ val buildRustCore = tasks.register<Exec>("buildRustCore") {
 }
 tasks.named("preBuild") { dependsOn(buildRustCore) }
 
+// Regenerates the launcher/notification/splash PNGs in res/ from the master
+// logo (android/branding/ara_logo_master.png). NOT part of preBuild on
+// purpose: assembleDebug/assembleRelease must keep working on a machine
+// without Python/Pillow, using the PNGs this task already committed to
+// res/. Run manually after replacing the master logo:
+//     ./gradlew regenerateBrandIcons
+val regenerateBrandIcons = tasks.register<Exec>("regenerateBrandIcons") {
+    group = "ara branding"
+    description = "Regenerates mipmap/drawable icon assets from android/branding/ara_logo_master.png (requires python3 + Pillow)."
+    val script = rootProject.file("branding/generate_icons.py")
+    inputs.file(script)
+    inputs.file(rootProject.file("branding/ara_logo_master.png"))
+    commandLine("python3", script.path)
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.animation)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.activity.compose)
@@ -86,6 +102,7 @@ dependencies {
     // closure (and, via KEEP + reboot re-enqueue in MainActivity, reboots).
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     // UniFFI's Kotlin bindings load the native library through JNA.
     implementation("${libs.jna.get()}@aar")
 

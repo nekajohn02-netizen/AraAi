@@ -20,6 +20,31 @@ pub enum ThermalState {
     Critical,
 }
 
+impl ThermalState {
+    /// How many of the device's CPU cores are safe to peg at 100% for
+    /// sustained, max-power work (LLM inference) at this thermal state.
+    /// Always at least 1 and never more than `total_cores`, so a device
+    /// already throttled by the OS doesn't get pushed further into thermal
+    /// shutdown by the model itself.
+    pub fn thread_budget(self, total_cores: u32) -> u32 {
+        let total = total_cores.max(1);
+        let fraction = match self {
+            ThermalState::None | ThermalState::Light => 1.0,
+            ThermalState::Moderate => 0.75,
+            ThermalState::Severe => 0.5,
+            ThermalState::Critical => 0.25,
+        };
+        ((total as f64 * fraction).round() as u32).clamp(1, total)
+    }
+}
+
+/// [`ThermalState::thread_budget`], defaulting to "no thermal data yet" ==
+/// full cores (the pre-existing behavior) rather than guessing a device is
+/// hot. `total_cores` is normally `std::thread::available_parallelism()`.
+pub fn thread_budget_for(total_cores: u32, thermal: Option<ThermalState>) -> u32 {
+    thermal.unwrap_or(ThermalState::None).thread_budget(total_cores)
+}
+
 /// Facts provided by the host platform (Kotlin side). All optional.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostHints {
@@ -28,6 +53,51 @@ pub struct HostHints {
     pub gpu_offload_supported: Option<bool>,
     pub device_model: Option<String>,
     pub os_version: Option<String>,
+    /// The SoC model string from Android's own `Build.SOC_MODEL` (API 31+,
+    /// e.g. `"SM8650"`), when the host can read it. Used only by
+    /// [`classify_image_gen_tier`] — a completely separate question from
+    /// text-model selection (`classify_tier`), see that function's docs.
+    pub soc_model: Option<String>,
+}
+
+/// Rough feasibility tier for on-device image generation (`docs/
+/// EXPANSION_BLUEPRINT.md` Category Q) — **not** the same question as
+/// `classify_tier` for text models. Diffusion-style image generation is
+/// compute-bound (repeated denoising steps), not memory-bandwidth-bound
+/// like autoregressive text decoding, so it is only fast with real NPU
+/// acceleration (Qualcomm QNN/LiteRT) — more RAM or more CPU cores alone
+/// do not fix this the way they help a text model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageGenTier {
+    /// A known Snapdragon 8-series SoC — published developer benchmarks
+    /// report ~5-15s for a 512x512 image, so attempting it is reasonable.
+    /// Still not a guarantee the NPU path actually engages at runtime —
+    /// same caveat as `gpu_offload_supported` for the text engine.
+    LikelyFastNpu,
+    /// Unknown or a known non-NPU SoC. CPU-only diffusion is technically
+    /// possible but takes **minutes per image, not seconds** — the UI must
+    /// disclose this plainly rather than silently attempt it.
+    CpuOnlySlow,
+}
+
+/// Classifies [`ImageGenTier`] from the SoC model string alone. This is a
+/// **conservative guess from a name, not a measurement** — there is no
+/// portable Android API that directly answers "does this chip have a
+/// usable NPU for diffusion", so an unrecognized or missing `soc_model`
+/// always falls back to the honest, slow answer rather than an optimistic
+/// guess.
+pub fn classify_image_gen_tier(soc_model: Option<&str>) -> ImageGenTier {
+    // Snapdragon 8 Gen 1 / 8+ Gen 1 / 8 Gen 2 / 8 Gen 3 / 8 Elite codenames,
+    // the chips developer write-ups report usable on-device diffusion speed
+    // on (`docs/EXPANSION_BLUEPRINT.md` Q1/Q7, checked 2026-11-26).
+    const KNOWN_FAST_SOCS: &[&str] = &["SM8350", "SM8450", "SM8475", "SM8550", "SM8650"];
+    match soc_model {
+        Some(s) if KNOWN_FAST_SOCS.iter().any(|k| s.to_ascii_uppercase().contains(k)) => {
+            ImageGenTier::LikelyFastNpu
+        }
+        _ => ImageGenTier::CpuOnlySlow,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -252,6 +322,38 @@ Buffers:            2000 kB\n\
 Cached:          2500000 kB\n";
 
     #[test]
+    fn thread_budget_full_on_cool_device() {
+        assert_eq!(ThermalState::None.thread_budget(8), 8);
+        assert_eq!(ThermalState::Light.thread_budget(8), 8);
+        assert_eq!(thread_budget_for(8, None), 8, "no thermal data must not throttle");
+    }
+
+    #[test]
+    fn thread_budget_scales_down_as_device_heats_up() {
+        assert_eq!(ThermalState::Moderate.thread_budget(8), 6);
+        assert_eq!(ThermalState::Severe.thread_budget(8), 4);
+        assert_eq!(ThermalState::Critical.thread_budget(8), 2);
+        assert_eq!(thread_budget_for(8, Some(ThermalState::Severe)), 4);
+    }
+
+    #[test]
+    fn thread_budget_never_reaches_zero_on_single_core_or_critical() {
+        for cores in [0, 1, 2, 3] {
+            for state in [
+                ThermalState::None,
+                ThermalState::Light,
+                ThermalState::Moderate,
+                ThermalState::Severe,
+                ThermalState::Critical,
+            ] {
+                let budget = state.thread_budget(cores);
+                assert!(budget >= 1, "{state:?} at {cores} cores gave {budget}");
+                assert!(budget <= cores.max(1));
+            }
+        }
+    }
+
+    #[test]
     fn parses_meminfo() {
         let m = parse_meminfo(ANDROID_MEMINFO).unwrap();
         assert_eq!(m.total, 7645328 * 1024);
@@ -332,5 +434,26 @@ Cached:          2500000 kB\n";
     #[test]
     fn storage_query_fails_cleanly_for_missing_path() {
         assert!(free_storage_bytes(Path::new("/definitely/not/here")).is_err());
+    }
+
+    #[test]
+    fn image_gen_tier_recognizes_known_snapdragon_8_series_socs() {
+        for soc in ["SM8650", "sm8550", "SM8475", "SM8450", "SM8350"] {
+            assert_eq!(
+                classify_image_gen_tier(Some(soc)),
+                ImageGenTier::LikelyFastNpu,
+                "{soc}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_gen_tier_defaults_to_slow_for_unknown_or_missing_soc() {
+        assert_eq!(
+            classify_image_gen_tier(Some("MT6983")), // a MediaTek chip, not in the known-fast list
+            ImageGenTier::CpuOnlySlow
+        );
+        assert_eq!(classify_image_gen_tier(None), ImageGenTier::CpuOnlySlow);
+        assert_eq!(classify_image_gen_tier(Some("")), ImageGenTier::CpuOnlySlow);
     }
 }

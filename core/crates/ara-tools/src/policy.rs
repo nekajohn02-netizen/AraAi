@@ -51,6 +51,8 @@ impl PermissionStore {
             OpenWeb,
             ReadUserFiles,
             Memory,
+            SmartHome,
+            MediaGeneration,
         ] {
             s.set(p, Grant::Always);
         }
